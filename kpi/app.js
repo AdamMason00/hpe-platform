@@ -109,6 +109,7 @@ function loadAll(){
   return Promise.all(jobs).then(function(){
     if (!STATE.staff || !STATE.staff.length) STATE.staff = normaliseStaff(CFG.DEFAULT_STAFF);
     ensureManagerBonus();
+    rebuildEfficiencyIndex();   // link Labour-data names to roster after both load
     setBusy(false);
   }).catch(function(e){ setBusy(false); toast('Load issue: ' + e.message, 'bad'); });
 }
@@ -134,7 +135,8 @@ function normaliseStaff(arr){
       payType: s.payType || 'Hourly',
       vacationWeeks: s.vacationWeeks == null ? 0 : Number(s.vacationWeeks),
       payHistory: Array.isArray(s.payHistory) ? s.payHistory : [],
-      active: s.active !== false
+      active: s.active !== false,
+      effName: s.effName || ''   // Labour-data name override for efficiency linkage
     };
   });
 }
@@ -643,6 +645,8 @@ function showEditStaff(name){
       '<label class="fld"><span id="eRateLbl">Hourly rate $</span><input type="number" step="0.01" id="eRate" value="' + num(s.payRate) + '"></label>' +
       '<label class="fld"><span>FTE</span><input type="number" step="0.1" id="eFte" value="' + (s.fte==null?1:s.fte) + '"></label>' +
       '<label class="fld"><span>Vacation (weeks)</span><input type="number" step="0.5" id="eVac" value="' + (s.vacationWeeks||0) + '"></label>' +
+      '<label class="fld" style="grid-column:1 / -1"><span>Labour-data name (override — only if efficiency doesn’t auto-match)</span>' +
+        '<input type="text" id="eEffName" value="' + esc(s.effName || '') + '" placeholder="e.g. NATHAN VERBURG"></label>' +
     '</div>' +
     '<div id="eAnnual" class="stat ok" style="margin:4px 0 14px"></div>' +
     '<div class="flex gap" style="justify-content:flex-end">' +
@@ -668,6 +672,8 @@ function showEditStaff(name){
       s.payRate = num($('#eRate',box).value);
       s.fte = num($('#eFte',box).value);
       s.vacationWeeks = num($('#eVac',box).value);
+      s.effName = $('#eEffName',box).value.trim();
+      rebuildEfficiencyIndex();   // re-link efficiency with the new override
       saveStaff().then(function(){ closeModal(); go('staff'); });
     });
   });
@@ -835,7 +841,7 @@ function renderFlaggedWOs(stores){
     '<div class="table-wrap"><table><thead><tr><th>Tech</th><th>Month</th><th>WO#</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
   flagged.slice(0, 200).forEach(function(r){
     var high = r.eff > c.effHighFlag;
-    html += '<tr class="' + (high ? 'bg-warn' : 'bg-bad') + '"><td>' + esc(r.name) + '</td><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td>' +
+    html += '<tr class="' + (high ? 'bg-warn' : 'bg-bad') + '"><td>' + esc(r.display || r.name) + '</td><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td>' +
       '<td class="num">' + r.reported.toFixed(1) + '</td><td class="num">' + r.billed.toFixed(1) + '</td>' +
       '<td class="num"><b>' + r.eff.toFixed(0) + '%</b></td>' +
       '<td><span class="pill ' + (high ? 'warn' : 'bad') + '">' + (high ? 'Over 100%' : 'Under 75%') + '</span></td></tr>';
@@ -1040,9 +1046,10 @@ RENDER.tech = function(sec){
   }
   html += '</div><div class="spacer"></div>';
 
-  // flagged WOs for this tech (over 100% and under 75%)
+  // flagged WOs for this tech (over 100% and under 75%) — match on the
+  // resolved roster name so the tech's own data is found by their login name.
   var mineFlags = STATE.efficiency.rows.filter(function(r){
-    return r.name === name && r.reported > 0 && (r.eff > c.effHighFlag || r.eff < c.effLowFlag);
+    return (r.display || r.name) === name && r.reported > 0 && (r.eff > c.effHighFlag || r.eff < c.effLowFlag);
   });
   html += '<div class="card"><div class="section-title"><h3>My Flagged Work Orders</h3><span class="muted">over ' + c.effHighFlag + '% / under ' + c.effLowFlag + '%</span></div>';
   if (!mineFlags.length) html += '<div class="empty">No flagged work orders. 👍</div>';
@@ -1256,13 +1263,58 @@ function handleEfficiencyFile(rows){
 function ingestEfficiency(rows, when){
   STATE.efficiency.rows = rows || [];
   STATE.efficiency.uploadedAt = when || STATE.efficiency.uploadedAt;
+  rebuildEfficiencyIndex();
+}
+
+/* ---- Labour-data name → roster employee linkage --------------------
+ * The Labour export and the roster use different name strings for the
+ * same person (e.g. "JARED FRANCIA LOBBAN" vs "Jared Lobban", or the
+ * nickname "Ed Kindt" vs "RANDOLF E. KINDT"). We resolve each efficiency
+ * row to a roster employee so tables show clean roster names and the tech
+ * PIN dashboard (which looks up by roster name) finds the right data.
+ *
+ * Match order, most→least specific:
+ *   1. explicit s.effName override (exact, case-insensitive)
+ *   2. same first + last token
+ *   3. same first INITIAL + last token   (Al↔Alex, Don↔Donald)
+ *   4. unique last token across the roster (Ed↔Randolf Kindt)
+ * Unmatched names fall back to their raw Labour name (still visible). */
+function nameTokens(name){
+  return String(name || '').toUpperCase().replace(/[^A-Z\s]/g, ' ').split(/\s+/).filter(Boolean);
+}
+function rosterDisplayForLabour(labourName){
+  var toks = nameTokens(labourName);
+  if (!toks.length) return labourName;
+  var first = toks[0], last = toks[toks.length - 1];
+
+  var byFirstLast = null, byInitialLast = null, lastMatches = [];
+  for (var i = 0; i < STATE.staff.length; i++) {
+    var s = STATE.staff[i];
+    if (s.effName && s.effName.toUpperCase() === String(labourName).toUpperCase()) return s.name;
+    var rt = nameTokens(s.name);
+    if (!rt.length) continue;
+    var rFirst = rt[0], rLast = rt[rt.length - 1];
+    if (rt.length < 2) continue;                 // single-token roster names can't last-match
+    if (rLast === last) {
+      lastMatches.push(s.name);
+      if (rFirst === first) byFirstLast = s.name;
+      else if (rFirst.charAt(0) === first.charAt(0)) byInitialLast = s.name;
+    }
+  }
+  if (byFirstLast) return byFirstLast;
+  if (byInitialLast) return byInitialLast;
+  if (lastMatches.length === 1) return lastMatches[0];
+  return labourName;                              // no confident match
+}
+function rebuildEfficiencyIndex(){
   var by = {};
-  STATE.efficiency.rows.forEach(function(r){
+  (STATE.efficiency.rows || []).forEach(function(r){
     if (!r.name) return;
-    by[r.name] = by[r.name] || {};
-    by[r.name][r.month] = by[r.name][r.month] || { reported: 0, billed: 0 };
-    by[r.name][r.month].reported += r.reported;
-    by[r.name][r.month].billed += r.billed;
+    r.display = rosterDisplayForLabour(r.name);   // tag the row with its roster name
+    by[r.display] = by[r.display] || {};
+    by[r.display][r.month] = by[r.display][r.month] || { reported: 0, billed: 0 };
+    by[r.display][r.month].reported += r.reported;
+    by[r.display][r.month].billed += r.billed;
   });
   STATE.efficiency.byTechMonth = by;
 }
@@ -1381,14 +1433,14 @@ function managerFilterStaff(list){
   return list;
 }
 function effTechsForDivision(div){
-  // Only techs that actually have efficiency metrics for this division.
-  // Sourcing from the efficiency rows (not the roster) avoids duplicate /
-  // empty rows when a person's roster name differs from their Labour-data
-  // name (e.g. "Jared Lobban" vs "JARED FRANCIA LOBBAN").
+  // Only techs that actually have efficiency metrics for this division,
+  // keyed by their resolved roster name (r.display) so each person shows
+  // once with a clean name — no duplicate/empty rows.
   var totals = {};
   STATE.efficiency.rows.forEach(function(r){
     if (r.division !== div || !r.name) return;
-    totals[r.name] = (totals[r.name] || 0) + (r.reported || 0) + (r.billed || 0);
+    var key = r.display || r.name;
+    totals[key] = (totals[key] || 0) + (r.reported || 0) + (r.billed || 0);
   });
   return Object.keys(totals).filter(function(n){ return totals[n] > 0; }).sort();
 }
