@@ -1381,11 +1381,16 @@ function managerFilterStaff(list){
   return list;
 }
 function effTechsForDivision(div){
-  // techs (from roster) for this division that also appear in efficiency data, plus any uploaded names matching division
-  var names = {};
-  STATE.staff.forEach(function(s){ if (s.roleType === 'tech' && s.division === div) names[s.name] = true; });
-  STATE.efficiency.rows.forEach(function(r){ if (r.division === div && r.name) names[r.name] = true; });
-  return Object.keys(names).sort();
+  // Only techs that actually have efficiency metrics for this division.
+  // Sourcing from the efficiency rows (not the roster) avoids duplicate /
+  // empty rows when a person's roster name differs from their Labour-data
+  // name (e.g. "Jared Lobban" vs "JARED FRANCIA LOBBAN").
+  var totals = {};
+  STATE.efficiency.rows.forEach(function(r){
+    if (r.division !== div || !r.name) return;
+    totals[r.name] = (totals[r.name] || 0) + (r.reported || 0) + (r.billed || 0);
+  });
+  return Object.keys(totals).filter(function(n){ return totals[n] > 0; }).sort();
 }
 function effMonths(){
   var set = {};
