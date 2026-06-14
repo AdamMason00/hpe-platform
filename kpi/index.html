@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KPI Incentive Manager — HPE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<!-- SheetJS for parsing the .xlsx uploads on the Configuration page -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <!-- ============================= SIDEBAR ============================= -->
+  <aside class="sidebar">
+    <div class="sb-head">
+      <div class="sb-logo">
+        <div class="sb-mark">HPE</div>
+        <div>
+          <h1>KPI Manager</h1>
+          <p>Incentive &amp; Efficiency</p>
+        </div>
+      </div>
+    </div>
+    <nav class="sb-nav" id="nav"><!-- built by app.js per role --></nav>
+    <div class="sb-foot">
+      <div class="sb-user" id="sbUser">—</div>
+      <div class="sb-role" id="sbRole">—</div>
+      <div class="row">
+        <a href="../index.html">&larr; All modules</a>
+        <a href="#" id="signout">Sign out</a>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============================== MAIN ============================== -->
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h2 id="pageTitle">Dashboard</h2>
+        <div class="sub" id="pageSub">Quarterly performance overview</div>
+      </div>
+      <div class="right">
+        <div class="qpick">
+          <label for="qSel">Period</label>
+          <select id="qSel"></select>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="reloadBtn" title="Reload from backend">⟳</button>
+      </div>
+    </header>
+
+    <main class="content" id="content">
+      <!-- One <section> per page; app.js renders into the active one -->
+      <section class="page" id="page-dashboard"></section>
+      <section class="page" id="page-scoreboard"></section>
+      <section class="page" id="page-annual"></section>
+      <section class="page" id="page-quarterly"></section>
+      <section class="page" id="page-staff"></section>
+      <section class="page" id="page-payroll"></section>
+      <section class="page" id="page-efficiency"></section>
+      <section class="page" id="page-payments"></section>
+      <section class="page" id="page-growth"></section>
+      <section class="page" id="page-manager-bonuses"></section>
+      <section class="page" id="page-scenario"></section>
+      <section class="page" id="page-config"></section>
+      <!-- role dashboards -->
+      <section class="page" id="page-store"></section>
+      <section class="page" id="page-tech"></section>
+      <section class="page" id="page-support"></section>
+    </main>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="../shared/config.js"></script>
+  <script src="../shared/api.js"></script>
+  <script src="../shared/auth.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

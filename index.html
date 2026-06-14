@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HPE Service Platform — Hyde Park Equipment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --orange:#E8620A; --orange-d:#c9510a; --dark:#1c1c1c; --dark-2:#262626;
+    --line:#e5e5e5; --muted:#8a8a8a; --ok:#16a34a; --bad:#dc2626; --bg:#f4f5f7;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;font-family:'Barlow',system-ui,sans-serif;color:#1c1c1c;
+    background:var(--dark);
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(232,98,10,.18), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(232,98,10,.10), transparent 60%),
+      var(--dark);
+    display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;
+  }
+  .card{
+    width:100%;max-width:440px;background:#fff;border-radius:16px;overflow:hidden;
+    box-shadow:0 30px 70px rgba(0,0,0,.45);
+  }
+  .head{background:var(--dark);color:#fff;padding:30px 32px 26px;position:relative}
+  .head::after{content:"";position:absolute;left:0;right:0;bottom:0;height:4px;background:var(--orange)}
+  .logo{display:flex;align-items:center;gap:12px}
+  .mark{
+    width:46px;height:46px;border-radius:10px;background:var(--orange);
+    display:flex;align-items:center;justify-content:center;font-family:'Barlow Condensed';
+    font-weight:700;font-size:22px;letter-spacing:1px;
+  }
+  .head h1{font-family:'Barlow Condensed';font-weight:700;font-size:24px;margin:0;letter-spacing:.5px}
+  .head p{margin:2px 0 0;color:#bdbdbd;font-size:13px}
+  .body{padding:26px 32px 30px}
+  .tabs{display:flex;gap:8px;background:var(--bg);padding:5px;border-radius:10px;margin-bottom:22px}
+  .tab{
+    flex:1;text-align:center;padding:10px;border-radius:7px;cursor:pointer;font-weight:600;
+    color:var(--muted);font-size:14px;user-select:none;
+  }
+  .tab.active{background:#fff;color:var(--dark);box-shadow:0 1px 4px rgba(0,0,0,.08)}
+  .pane{display:none}.pane.active{display:block}
+
+  .btn{
+    width:100%;border:0;border-radius:10px;padding:13px;font-weight:600;font-size:15px;
+    cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:10px;
+  }
+  .btn-google{background:#fff;color:#1c1c1c;border:1px solid var(--line)}
+  .btn-google:hover{background:#fafafa}
+  .btn-primary{background:var(--orange);color:#fff}
+  .btn-primary:hover{background:var(--orange-d)}
+  .hint{color:var(--muted);font-size:12.5px;line-height:1.5;margin:14px 2px 0;text-align:center}
+  .divider{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;margin:18px 0}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+
+  .manual{margin-top:14px}
+  .manual input{
+    width:100%;padding:12px;border:1px solid var(--line);border-radius:9px;font-size:14px;
+    font-family:inherit;margin-bottom:10px;
+  }
+
+  /* PIN keypad */
+  .pin-dots{display:flex;justify-content:center;gap:14px;margin:6px 0 20px}
+  .dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);transition:.15s}
+  .dot.on{background:var(--orange);border-color:var(--orange)}
+  .keys{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .key{
+    padding:16px;border:1px solid var(--line);border-radius:12px;background:#fff;font-size:20px;
+    font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace;
+  }
+  .key:hover{background:var(--bg)}
+  .key.ghost{border:0;background:transparent;cursor:default}
+  .key.action{color:var(--orange);font-size:15px;font-family:inherit}
+
+  .msg{margin-top:14px;padding:10px 12px;border-radius:9px;font-size:13px;display:none}
+  .msg.err{display:block;background:#fdecec;color:var(--bad);border:1px solid #f6caca}
+  .msg.ok{display:block;background:#eafaf0;color:var(--ok);border:1px solid #c7eed5}
+
+  /* Module hub (after login) */
+  .hub{display:none}
+  .who{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+  .who .name{font-weight:700;font-size:16px}
+  .who .role{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+  .who .out{background:none;border:0;color:var(--orange);font-weight:600;cursor:pointer;font-size:13px}
+  .mods{display:grid;gap:12px}
+  .mod{
+    display:flex;align-items:center;gap:14px;padding:16px;border:1px solid var(--line);
+    border-radius:12px;text-decoration:none;color:inherit;transition:.15s;
+  }
+  .mod:hover{border-color:var(--orange);box-shadow:0 6px 18px rgba(232,98,10,.12)}
+  .mod .ic{
+    width:44px;height:44px;border-radius:10px;flex:0 0 auto;display:flex;align-items:center;
+    justify-content:center;background:var(--bg);font-size:22px;
+  }
+  .mod .t{font-weight:700;font-size:15px}
+  .mod .d{font-size:12.5px;color:var(--muted)}
+  .mod.disabled{opacity:.45;pointer-events:none}
+  .spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(0,0,0,.2);
+    border-top-color:currentColor;border-radius:50%;animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .foot{text-align:center;color:#777;font-size:11px;margin-top:22px}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <div class="logo">
+        <div class="mark">HPE</div>
+        <div>
+          <h1>Service Platform</h1>
+          <p>Hyde Park Equipment · South &amp; North</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="body">
+      <!-- ============ LOGIN ============ -->
+      <div id="login">
+        <div class="tabs">
+          <div class="tab active" data-tab="mgr">Manager</div>
+          <div class="tab" data-tab="staff">Tech / Support</div>
+        </div>
+
+        <!-- Manager (Google email) -->
+        <div class="pane active" id="pane-mgr">
+          <button class="btn btn-google" id="googleBtn">
+            <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+            <span>Sign in with Google</span>
+          </button>
+          <div class="hint">Managers &amp; admins sign in with their <b>@hydeparkequipment.ca</b> Google account.</div>
+
+          <div class="divider">or sign in manually</div>
+          <div class="manual">
+            <input id="emailInput" type="email" placeholder="name@hydeparkequipment.ca" autocomplete="email">
+            <button class="btn btn-primary" id="emailBtn">Continue</button>
+          </div>
+        </div>
+
+        <!-- Tech / Support (PIN) -->
+        <div class="pane" id="pane-staff">
+          <div class="pin-dots" id="pinDots">
+            <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
+          </div>
+          <div class="keys" id="keys">
+            <div class="key" data-k="1">1</div><div class="key" data-k="2">2</div><div class="key" data-k="3">3</div>
+            <div class="key" data-k="4">4</div><div class="key" data-k="5">5</div><div class="key" data-k="6">6</div>
+            <div class="key" data-k="7">7</div><div class="key" data-k="8">8</div><div class="key" data-k="9">9</div>
+            <div class="key action" data-k="clear">Clear</div>
+            <div class="key" data-k="0">0</div>
+            <div class="key action" data-k="back">&larr;</div>
+          </div>
+          <div class="hint">Enter your 4-digit PIN. Don’t have one? Ask your manager.</div>
+        </div>
+
+        <div class="msg" id="msg"></div>
+      </div>
+
+      <!-- ============ HUB ============ -->
+      <div class="hub" id="hub">
+        <div class="who">
+          <div>
+            <div class="name" id="hubName">—</div>
+            <div class="role" id="hubRole">—</div>
+          </div>
+          <button class="out" id="logoutBtn">Sign out</button>
+        </div>
+        <div class="mods" id="mods"></div>
+      </div>
+
+      <div class="foot">© Hyde Park Equipment · HPE Service Platform v1.0</div>
+    </div>
+  </div>
+
+  <script src="shared/config.js"></script>
+  <script src="shared/api.js"></script>
+  <script src="shared/auth.js"></script>
+  <script>
+  (function(){
+    var AUTH = window.HPE_AUTH, $ = function(id){return document.getElementById(id);};
+    var msg = $('msg');
+
+    function showMsg(text, kind){
+      msg.textContent = text;
+      msg.className = 'msg ' + (kind || 'err');
+    }
+    function clearMsg(){ msg.className='msg'; msg.textContent=''; }
+
+    /* ---- tab switching ---- */
+    document.querySelectorAll('.tab').forEach(function(t){
+      t.addEventListener('click', function(){
+        document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active');});
+        document.querySelectorAll('.pane').forEach(function(x){x.classList.remove('active');});
+        t.classList.add('active');
+        $('pane-' + t.dataset.tab).classList.add('active');
+        clearMsg();
+      });
+    });
+
+    /* ---- Google login ---- */
+    $('googleBtn').addEventListener('click', function(){
+      clearMsg();
+      var btn=this; btn.disabled=true;
+      var label=btn.querySelector('span'); var old=label.textContent;
+      label.innerHTML='<span class="spinner"></span>';
+      AUTH.loginWithGoogle().then(enterHub).catch(function(e){
+        showMsg(e.message || 'Sign-in failed.');
+      }).then(function(){ btn.disabled=false; label.textContent=old; });
+    });
+
+    /* ---- manual email ---- */
+    $('emailBtn').addEventListener('click', function(){
+      clearMsg();
+      try { enterHub(AUTH.resolveEmail($('emailInput').value)); }
+      catch(e){ showMsg(e.message); }
+    });
+    $('emailInput').addEventListener('keydown', function(e){ if(e.key==='Enter') $('emailBtn').click(); });
+
+    /* ---- PIN keypad ---- */
+    var pin='';
+    function renderPin(){
+      var dots=$('pinDots').children;
+      for(var i=0;i<4;i++) dots[i].classList.toggle('on', i<pin.length);
+    }
+    $('keys').addEventListener('click', function(e){
+      var k=e.target.closest('.key'); if(!k) return;
+      var v=k.dataset.k;
+      if(v==='clear'){ pin=''; }
+      else if(v==='back'){ pin=pin.slice(0,-1); }
+      else if(/^\d$/.test(v) && pin.length<4){ pin+=v; }
+      renderPin();
+      clearMsg();
+      if(pin.length===4) submitPin();
+    });
+    document.addEventListener('keydown', function(e){
+      if(!$('pane-staff').classList.contains('active')) return;
+      if(/^\d$/.test(e.key) && pin.length<4){ pin+=e.key; renderPin(); if(pin.length===4) submitPin(); }
+      else if(e.key==='Backspace'){ pin=pin.slice(0,-1); renderPin(); }
+    });
+    function submitPin(){
+      var attempt=pin;
+      AUTH.loginWithPIN(attempt).then(enterHub).catch(function(err){
+        showMsg(err.message || 'PIN not recognized.');
+        pin=''; renderPin();
+      });
+    }
+
+    /* ---- module hub ---- */
+    var MODULES = [
+      { id:'kpi',      href:'kpi/index.html',      icon:'📊', title:'KPI Incentive Manager',
+        desc:'Scoreboards, efficiency, payroll & bonuses',
+        roles:['admin','manager','tech','support'] },
+      { id:'warranty', href:'warranty/index.html', icon:'🛠️', title:'Warranty Management',
+        desc:'Submit & track Kubota warranty claims',
+        roles:['admin','manager','tech','support'] }
+    ];
+
+    function enterHub(sess){
+      if(!sess) return;
+      $('login').style.display='none';
+      $('hub').style.display='block';
+      $('hubName').textContent = sess.name || sess.email || 'Signed in';
+      var roleLabel = ({admin:'Administrator',manager:'Store Manager',tech:'Technician',support:'Support Staff'})[sess.role] || sess.role;
+      $('hubRole').textContent = roleLabel + (sess.store ? ' · ' + (sess.store==='south'?'South':'North') : '');
+      var wrap=$('mods'); wrap.innerHTML='';
+      MODULES.forEach(function(m){
+        if(m.roles.indexOf(sess.role)===-1) return;
+        var a=document.createElement('a');
+        a.className='mod'; a.href=m.href;
+        a.innerHTML='<div class="ic">'+m.icon+'</div><div><div class="t">'+m.title+'</div><div class="d">'+m.desc+'</div></div>';
+        wrap.appendChild(a);
+      });
+    }
+
+    $('logoutBtn').addEventListener('click', function(){
+      AUTH.clearSession();
+      $('hub').style.display='none';
+      $('login').style.display='block';
+      pin=''; renderPin(); clearMsg();
+    });
+
+    /* ---- resume existing session ---- */
+    var existing = AUTH.getSession();
+    if(existing) enterHub(existing);
+  })();
+  </script>
+</body>
+</html>
