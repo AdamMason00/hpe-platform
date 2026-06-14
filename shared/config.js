@@ -17,7 +17,7 @@
    * here for reference and are also defined server-side in Code.gs.
    * ------------------------------------------------------------- */
   var BACKEND = {
-    API_URL: 'https://script.google.com/macros/s/AKfycbyIuygjcMrlgOaBZ2scB58peyez4vOom_KMPz8Ku_uIAkZHaRPHboWrXiHaaA6mAwN2/exec',
+    API_URL: 'https://script.google.com/macros/s/AKfycbwkniPdgD25XWiqYaJR7UfXZgp8vmfQ6s3xjRMtuHMEsLQKrWhW-yf29_7WUmzgKBtkYQ/exec',
     SHEET_ID: '1Ljh-Ycf1ut6TyV2NgXFRrypRUJzLRPpdUjl_yOIHrBw',
     DRIVE_FOLDER: '1m9wv8eaWhAaLe1qZ0T0P35zUmt4NrSPQ',   // uploads + backups
     PHOTOS_FOLDER: '1kbsKqfQp-Ms4YqwOtWxD2p3JYTiPEUu5'    // claim photos
