@@ -281,5 +281,181 @@ function initialSetup() {
   return 'ok';
 }
 
+/* ============================ LEGACY MIGRATION ============================
+ * One-time importer: copies the existing "KPI Manager 2026" data (a single
+ * AppData JSON blob, schema _version 5.0, plus the per-employee efficiency
+ * blob) into the new multi-key structure used by this backend.
+ *
+ * It does NOT modify the legacy tabs — it only reads them and writes the
+ * new KPI / Staff / Efficiency blobs. Safe to re-run (idempotent overwrite).
+ * Run migrateFromLegacy() once from the editor, check the log summary.
+ * ======================================================================= */
+var MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function migrateFromLegacy() {
+  var legacy = findLegacyBlob_(function (o) { return o && o._version && Array.isArray(o.employees); });
+  if (!legacy) throw new Error('Legacy AppData blob (with _version & employees) not found in the spreadsheet.');
+  var effBlob = findLegacyBlob_(function (o) {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return false;
+    var k = Object.keys(o)[0];
+    return k && o[k] && o[k].months && (o[k].empNum !== undefined || o[k].name !== undefined);
+  });
+
+  var kpi = mapLegacyKPI_(legacy);
+  var staff = mapLegacyStaff_(legacy.employees);
+  var eff = effBlob ? mapLegacyEfficiency_(effBlob) : { rows: [], uploadedAt: stamp() };
+
+  writeBlob('KPI', kpi);
+  writeBlob('Staff', { staff: staff });
+  writeBlob('Efficiency', eff);
+  logChange('migration', 'migrateFromLegacy',
+    staff.length + ' staff, ' + Object.keys(kpi.quarters).length + ' quarters, ' + eff.rows.length + ' eff rows');
+
+  var summary = {
+    staff: staff.length,
+    quarters: Object.keys(kpi.quarters),
+    managers: Object.keys(kpi.managerBonus),
+    effRows: eff.rows.length,
+    config: kpi.config
+  };
+  Logger.log('migrateFromLegacy summary: ' + JSON.stringify(summary, null, 2));
+  return summary;
+}
+
+// Scan every sheet/cell, JSON.parse candidates, return the first that passes `test`.
+function findLegacyBlob_(test) {
+  var ss = SpreadsheetApp.openById(SHEET_ID);
+  var sheets = ss.getSheets();
+  for (var s = 0; s < sheets.length; s++) {
+    var rng = sheets[s].getDataRange().getValues();
+    for (var r = 0; r < rng.length; r++) {
+      for (var c = 0; c < rng[r].length; c++) {
+        var v = rng[r][c];
+        if (typeof v !== 'string' || v.length < 20 || v.charAt(0) !== '{') continue;
+        var obj;
+        try { obj = JSON.parse(v); } catch (e) { continue; }
+        if (test(obj)) return obj;
+      }
+    }
+  }
+  return null;
+}
+
+function legacyStore_(s) {
+  s = String(s || '').toLowerCase();
+  if (s.indexOf('south') === 0) return 'south';
+  if (s.indexOf('north') === 0) return 'north';
+  return 'north'; // 'Both' (e.g. warranty admin) → north
+}
+function legacyDivision_(store) { return store === 'south' ? 'S' : 'M'; }
+function legacyRole_(role) {
+  role = String(role || '').toLowerCase();
+  if (role.indexOf('manager') !== -1) return 'manager';
+  if (role.indexOf('support') !== -1) return 'support';
+  if (role.indexOf('warranty') !== -1 || role.indexOf('admin') !== -1) return 'admin';
+  return 'tech';
+}
+
+function mapLegacyStaff_(employees) {
+  return (employees || []).map(function (e) {
+    var store = legacyStore_(e.store);
+    return {
+      id: e.id,
+      name: e.name,
+      store: store,
+      division: legacyDivision_(store),
+      roleType: legacyRole_(e.role),
+      fte: e.fte == null ? 1 : Number(e.fte),
+      pin: e.pin == null ? '' : String(e.pin),
+      payRate: e.payRate,
+      payType: e.payType,
+      payHistory: e.payHistory || [],
+      active: e.active !== false,
+      queue: e.queue || ''
+    };
+  });
+}
+
+function mapLegacyKPI_(legacy) {
+  var cfg = legacy.config || {};
+  var config = {
+    techEff: numOr_(cfg.techEff, 75), comeback: numOr_(cfg.comeback, 2),
+    svcGm: numOr_(cfg.svcGm, 78), partsGm: numOr_(cfg.partsGm, 32),
+    wipMax: numOr_(cfg.wipMax, 2), cap: numOr_(cfg.cap, 9000),
+    techShare: numOr_(cfg.techShare, 73), growthRate: numOr_(cfg.growthRate, 30),
+    warrantyAnnual: numOr_(legacy.warrantyAnnual, 5000), topUpPool: numOr_(legacy.topUpPool, 50000),
+    woWarnDays: 30, woCriticalDays: 60, effHighFlag: 100, effLowFlag: 75
+  };
+
+  // quarters: legacy {Q1..Q4}{North,South} -> '2026-Qn' { south, north }
+  var quarters = {};
+  var lq = legacy.quarters || {};
+  ['Q1', 'Q2', 'Q3', 'Q4'].forEach(function (q) {
+    var key = '2026-' + q;
+    var src = lq[q];
+    if (!src) return;
+    var out = {};
+    ['South', 'North'].forEach(function (st) {
+      var m = src[st];
+      if (!m) return;
+      out[st.toLowerCase()] = {
+        hrs: numOr_(m.hrs, 0), billed: numOr_(m.billed, 0), comeback: numOr_(m.comeback, 0),
+        svcGm: numOr_(m.svcGm, 0), partsGm: numOr_(m.partsGm, 0),
+        svcRev: numOr_(m.svcRev, 0), endingWip: numOr_(m.endingWip, 0),
+        notes: m.notes || '', paid: !!m.paid, paidDate: m.paidDate || ''
+      };
+    });
+    if (Object.keys(out).length) quarters[key] = out;
+  });
+
+  // manager KPI bonuses: legacy {South,North}{cap,paid{Qn}} -> email-keyed
+  var managerBonus = {};
+  var mk = legacy.mgrKPIBonuses || {};
+  var emailByStore = { south: 'steve@hydeparkequipment.ca', north: 'bill@hydeparkequipment.ca' };
+  ['South', 'North'].forEach(function (st) {
+    var src = mk[st];
+    if (!src) return;
+    var email = emailByStore[st.toLowerCase()];
+    var paid = {};
+    Object.keys(src.paid || {}).forEach(function (q) { paid['2026-' + q] = !!src.paid[q]; });
+    managerBonus[email] = { annualCap: numOr_(src.cap, 6000), paid: paid };
+  });
+
+  return {
+    config: config,
+    quarters: quarters,
+    managerBonus: managerBonus,
+    payments: [],
+    growth: { rate: config.growthRate, bank: { south: 0, north: 0 }, paidOut: 0, history: [] },
+    legacy: { mgrBonuses: legacy.mgrBonuses || {}, warrantyQuarters: legacy.warrantyQuarters || {},
+              topUpScores: legacy.topUpScores || {}, prevYear: legacy.prevYear || {} }
+  };
+}
+
+function mapLegacyEfficiency_(effBlob) {
+  var rows = [];
+  Object.keys(effBlob).forEach(function (key) {
+    var e = effBlob[key];
+    if (!e || !e.months) return;
+    var div = String(e.division || key.split('|').pop() || '').toUpperCase().charAt(0);
+    var name = e.name || key.split('|')[1] || key;
+    Object.keys(e.months).forEach(function (mk) {
+      var m = e.months[mk];
+      var reported = numOr_(m.hrRep, 0), billed = numOr_(m.hrBil, 0);
+      if (reported <= 0 && billed <= 0) return;
+      var monthNum = parseInt(String(mk).slice(4, 6), 10);
+      rows.push({
+        month: MONTH_ABBR[monthNum - 1] || String(mk),
+        name: name, division: div, docNum: '',
+        reported: reported, billed: billed,
+        eff: reported > 0 ? (billed / reported * 100) : 0
+      });
+    });
+  });
+  return { rows: rows, uploadedAt: stamp() };
+}
+
+function numOr_(v, d) { var n = parseFloat(v); return isNaN(n) ? d : n; }
+
 /* Quick self-test from the editor. */
 function testPing() { Logger.log(JSON.stringify(handleGet('ping', {}))); }

@@ -67,9 +67,11 @@
     svcGm: 78,          // % — KPI2 service gross margin floor
     partsGm: 32,        // % — KPI3 parts gross margin floor
     wipMax: 2,          // % of revenue — KPI4 open WIP ceiling
-    cap: 4927,          // $ — quarterly tech bonus pool cap
+    cap: 9000,          // $ — quarterly tech bonus pool cap (live value)
     techShare: 73,      // % — tech portion of the pool (support = 27%)
     growthRate: 30,     // % — growth bank accrual rate
+    warrantyAnnual: 5000,  // $ — warranty annual bonus pool (legacy)
+    topUpPool: 50000,      // $ — year-end top-up pool (legacy)
     // WO ageing thresholds (days) for the open-WO flagging
     woWarnDays: 30,
     woCriticalDays: 60,
@@ -85,44 +87,53 @@
   };
 
   /* ---------------------------------------------------------------
-   * DEFAULT EMPLOYEE ROSTER
-   * Last names are filled in where known; update via Staff Roster /
-   * saveStaff once Adam confirms the rest. roleType drives dashboards:
+   * DEFAULT EMPLOYEE ROSTER  (fallback only)
+   * Real roster, names, stores, roles, FTE and pay reflect the live
+   * HydePark_KPI_Database_2026 sheet (legacy AppData blob, v5.0).
+   * PINs are intentionally BLANK here — real PINs live only in the
+   * private backend Staff blob, never in this public repo. They are
+   * carried over by Code.gs migrateFromLegacy(). The frontend normally
+   * loads the roster from the backend; this array is just the offline
+   * fallback. roleType drives dashboards:
    *   'tech'    -> efficiency-based KPI dashboard
    *   'support' -> open-WO queue dashboard
-   *   'admin'   -> warranty admin
-   * division: S = South, M = North.
+   *   'admin'   -> warranty admin / office admin
+   *   'manager' -> store dashboard (also email-auth Tier 1)
+   * division: S = South, M = North.  active:false = no longer employed.
    * ------------------------------------------------------------- */
   var DEFAULT_STAFF = [
     // ---- South techs ----
-    { name: 'Stewart Brooks', store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '' },
-    { name: 'Steve',          store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '' },
-    { name: 'Alex Monck',     store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '' },
-    { name: 'Jacob',          store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '' },
-    { name: 'Adam Hill',      store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '' },
-    { name: 'Logan',          store: 'south', division: 'S', roleType: 'tech',    fte: 0.5, pin: '' },
+    { name: 'Jared Lobban',     store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 43,    payType: 'Hourly', active: true },
+    { name: 'John Reiger',      store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 36,    payType: 'Hourly', active: true },
+    { name: 'Tyler Nicholson',  store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 32,    payType: 'Hourly', active: true },
+    { name: 'Caden Koetsier',   store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 26,    payType: 'Hourly', active: true },
+    { name: 'Ed Kindt',         store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 35.75, payType: 'Hourly', active: true },
+    { name: 'Al Monck',         store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 28.5,  payType: 'Hourly', active: true },
+    { name: 'Logan Hardman',    store: 'south', division: 'S', roleType: 'tech',    fte: 0.5, pin: '', payRate: 19,    payType: 'Hourly', active: true },
+    { name: 'Tyler Mcdougall',  store: 'south', division: 'S', roleType: 'tech',    fte: 0.5, pin: '', payRate: 19,    payType: 'Hourly', active: true },
     // ---- South support ----
-    { name: 'Stew',  store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', queue: 'WS' },
-    { name: 'Amy',   store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', queue: 'IS' },
-    { name: 'Matt',  store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', queue: 'IS' },
-    { name: 'Thorin',store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', queue: 'IS' },
+    { name: 'Stew Brooks',      store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', payRate: 27,    payType: 'Hourly', active: true, queue: 'WS' },
+    { name: 'Amy',              store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', payRate: 30.5,  payType: 'Hourly', active: true, queue: 'IS' },
+    { name: 'Matt Berkelmans',  store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', payRate: 28.5,  payType: 'Hourly', active: true, queue: 'IS' },
+    { name: 'Thorin Wilson',    store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', payRate: 29,    payType: 'Hourly', active: true, queue: 'IS' },
     // ---- North techs ----
-    { name: 'Bryan Smith', store: 'north', division: 'M', roleType: 'tech', fte: 1.0, pin: '' },
-    { name: 'Pat',         store: 'north', division: 'M', roleType: 'tech', fte: 1.0, pin: '' },
-    { name: 'Alex Beer',   store: 'north', division: 'M', roleType: 'tech', fte: 1.0, pin: '' },
-    { name: 'Jon',         store: 'north', division: 'M', roleType: 'tech', fte: 1.0, pin: '' },
-    { name: 'Tyler',       store: 'north', division: 'M', roleType: 'tech', fte: 1.0, pin: '' },
+    { name: 'Alex Beer',        store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', payRate: 40,    payType: 'Hourly', active: true },
+    { name: 'Andrew Muma',      store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', payRate: 37,    payType: 'Hourly', active: true },
+    { name: 'Don Raes',         store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', payRate: 40,    payType: 'Hourly', active: true },
+    { name: 'Pat Schaffner',    store: 'north', division: 'M', roleType: 'tech',    fte: 0.5, pin: '', payRate: 35,    payType: 'Hourly', active: true },
+    { name: 'Nate',             store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', active: false },
     // ---- North support ----
-    { name: 'Zach',   store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', queue: 'IM' },
-    { name: 'Travis', store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', queue: 'IM' },
-    { name: 'Paul',   store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', queue: 'IM' },
-    { name: 'Bill D', store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', queue: 'WM' },
-    { name: 'Bryan',  store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', queue: 'WM' },
+    { name: 'Paul Lopez',       store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', payRate: 25,    payType: 'Hourly', active: true, queue: 'IM' },
+    { name: 'Zach Noble-Welch', store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', payRate: 25,    payType: 'Hourly', active: true, queue: 'IM' },
+    { name: 'Travis Wolfenden', store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', payRate: 27,    payType: 'Hourly', active: true, queue: 'IM' },
+    { name: 'Bryan Smith',      store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', payRate: 27.5,  payType: 'Hourly', active: true, queue: 'WM' },
     // ---- Warranty admin ----
-    { name: 'Andy Van Bommel', store: 'north', division: 'M', roleType: 'admin', fte: 1.0, pin: '' },
+    { name: 'Andy Van Bommel',  store: 'north', division: 'M', roleType: 'admin',   fte: 1.0, pin: '', payRate: 33.5,  payType: 'Hourly', active: true },
+    // ---- Office admin ----
+    { name: 'Mell Hogg',        store: 'south', division: 'S', roleType: 'admin',   fte: 1.0, pin: '', payRate: 58000, payType: 'Salary', active: true },
     // ---- Managers (also email-auth Tier 1) ----
-    { name: 'Steve Hayes',  store: 'south', division: 'S', roleType: 'manager', fte: 1.0, pin: '' },
-    { name: 'Bill Denison', store: 'north', division: 'M', roleType: 'manager', fte: 1.0, pin: '' }
+    { name: 'Steve Hayes',      store: 'south', division: 'S', roleType: 'manager', fte: 1.0, pin: '', payRate: 100000, payType: 'Salary', active: true },
+    { name: 'Bill Denison',     store: 'north', division: 'M', roleType: 'manager', fte: 1.0, pin: '', payRate: 97000,  payType: 'Salary', active: true }
   ];
 
   /* ---------------------------------------------------------------
