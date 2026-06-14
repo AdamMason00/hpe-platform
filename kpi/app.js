@@ -126,11 +126,32 @@ function mergeKPI(r){
 function normaliseStaff(arr){
   return (arr || []).map(function(s){
     return {
-      name: s.name, store: s.store, division: s.division || storeDivision(s.store),
+      id: s.id, name: s.name, store: s.store, division: s.division || storeDivision(s.store),
       roleType: s.roleType || s.role || 'tech', fte: s.fte == null ? 1 : Number(s.fte),
-      pin: s.pin == null ? '' : String(s.pin), queue: s.queue || ''
+      pin: s.pin == null ? '' : String(s.pin), queue: s.queue || '',
+      // pay / compensation fields (preserved from backend + migration)
+      payRate: s.payRate == null ? 0 : Number(s.payRate),
+      payType: s.payType || 'Hourly',
+      vacationWeeks: s.vacationWeeks == null ? 0 : Number(s.vacationWeeks),
+      payHistory: Array.isArray(s.payHistory) ? s.payHistory : [],
+      active: s.active !== false
     };
   });
+}
+
+/* ---- compensation helpers ----
+ * Approximate annual income. Hourly assumes a standard 40h week × 52 weeks
+ * (paid vacation included), scaled by FTE. Salary is taken as-is. */
+var HOURS_PER_WEEK = 40, WEEKS_PER_YEAR = 52;
+function annualIncome(s){
+  var rate = num(s.payRate), fte = (s.fte == null ? 1 : Number(s.fte));
+  if ((s.payType || 'Hourly') === 'Salary') return rate;        // salary already annual
+  return rate * HOURS_PER_WEEK * WEEKS_PER_YEAR * fte;
+}
+function wageLabel(s){
+  return (s.payType || 'Hourly') === 'Salary'
+    ? money(s.payRate) + '/yr'
+    : money2(s.payRate) + '/hr' + (s.fte && s.fte !== 1 ? ' · ' + s.fte + ' FTE' : '');
 }
 function ensureManagerBonus(){
   Object.keys(CFG.MANAGER_BONUS).forEach(function(email){
@@ -528,65 +549,214 @@ RENDER.quarterly = function(sec){
 };
 
 /* ---- Staff Roster ---- */
+function staffRec(name){ return STATE.staff.filter(function(x){ return x.name === name; })[0]; }
+
 RENDER.staff = function(sec){
   var admin = AUTH.isAdmin(SESSION);
   var roster = managerFilterStaff(STATE.staff);
+  var activeRoster = roster.filter(function(s){ return s.active !== false; });
+  var totalAnnual = activeRoster.reduce(function(a, s){ return a + annualIncome(s); }, 0);
+
   var html = '<div class="card"><div class="section-title"><h3>Staff Roster</h3>' +
     '<div class="flex gap">' +
       (admin ? '<button class="btn btn-ghost btn-sm" id="addStaff">+ Add</button>' : '') +
       (admin ? '<button class="btn btn-ghost btn-sm" id="savePins">Save PINs</button>' : '') +
       (admin ? '<button class="btn btn-primary btn-sm" id="saveRoster">Save roster</button>' : '') +
     '</div></div>';
+
+  // payroll summary strip (approx annual wages)
+  html += '<div class="grid g3" style="margin-bottom:16px">' +
+    stat('Active employees', activeRoster.length, roster.length + ' on roster', 'blue') +
+    stat('Approx. annual wages', money(totalAnnual), 'active staff, 40h × 52wk basis', 'ok') +
+    stat('Avg per employee', money(activeRoster.length ? totalAnnual / activeRoster.length : 0), '', '') +
+    '</div>';
+
   html += '<div class="table-wrap"><table><thead><tr>' +
     '<th>Name</th><th>Store</th><th>Role</th><th class="num">FTE</th>' +
-    (admin ? '<th class="num">PIN</th><th>Pay History</th>' : '') + '</tr></thead><tbody>';
-  roster.forEach(function(s, i){
-    html += '<tr data-i="' + i + '"><td><b>' + esc(s.name) + '</b></td>' +
+    '<th class="num">Wage</th><th class="num">Approx. Annual</th><th class="num">Vac (wks)</th>' +
+    (admin ? '<th class="num">PIN</th><th>Actions</th>' : '') + '</tr></thead><tbody>';
+  roster.forEach(function(s){
+    var inactive = s.active === false;
+    html += '<tr' + (inactive ? ' style="opacity:.5"' : '') + '><td><b>' + esc(s.name) + '</b>' +
+        (inactive ? ' <span class="pill muted">inactive</span>' : '') + '</td>' +
       '<td>' + storeName(s.store) + '</td>' +
       '<td><span class="pill muted">' + esc(s.roleType) + '</span></td>' +
-      '<td class="num">' + s.fte + '</td>';
+      '<td class="num">' + s.fte + '</td>' +
+      '<td class="num">' + (s.payRate ? wageLabel(s) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="num"><b>' + (s.payRate ? money(annualIncome(s)) : '—') + '</b></td>' +
+      '<td class="num">' + (s.vacationWeeks || 0) + '</td>';
     if (admin) {
-      html += '<td class="num"><input type="text" maxlength="4" inputmode="numeric" style="width:78px;text-align:center" ' +
+      html += '<td class="num"><input type="text" maxlength="4" inputmode="numeric" style="width:72px;text-align:center" ' +
         'class="mono" data-pin="' + esc(s.name) + '" value="' + esc(s.pin) + '" placeholder="––––"></td>';
-      html += '<td><button class="btn btn-ghost btn-sm" data-payhist="' + esc(s.name) + '">View</button></td>';
+      html += '<td><div class="flex gap">' +
+        '<button class="btn btn-ghost btn-sm" data-edit="' + esc(s.name) + '">Edit</button>' +
+        '<button class="btn btn-primary btn-sm" data-raise="' + esc(s.name) + '">Raise</button>' +
+        '<button class="btn btn-ghost btn-sm" data-hist="' + esc(s.name) + '">History</button>' +
+      '</div></td>';
     }
     html += '</tr>';
   });
   html += '</tbody></table></div>';
-  if (!admin) html += '<div class="muted" style="margin-top:10px">PIN assignment & pay history are admin-only.</div>';
+  html += '<div class="muted" style="margin-top:10px">Approx. annual = hourly rate × 40h × 52wk × FTE (salary shown as-is). Vacation is paid time off and does not reduce the estimate.</div>';
+  if (!admin) html += '<div class="muted" style="margin-top:6px">Editing, PINs and pay history are admin-only.</div>';
   html += '</div>';
   sec.innerHTML = html;
 
   if (admin) {
     sec.querySelectorAll('input[data-pin]').forEach(function(inp){
       inp.addEventListener('change', function(){
-        var nm = inp.getAttribute('data-pin');
-        var rec = STATE.staff.filter(function(x){ return x.name === nm; })[0];
+        var rec = staffRec(inp.getAttribute('data-pin'));
         if (rec) rec.pin = inp.value.replace(/\D/g,'').slice(0,4);
         inp.value = rec ? rec.pin : '';
       });
     });
-    sec.querySelectorAll('button[data-payhist]').forEach(function(b){
-      b.addEventListener('click', function(){ showPayHistory(b.getAttribute('data-payhist')); });
-    });
+    sec.querySelectorAll('button[data-edit]').forEach(function(b){
+      b.addEventListener('click', function(){ showEditStaff(b.getAttribute('data-edit')); }); });
+    sec.querySelectorAll('button[data-raise]').forEach(function(b){
+      b.addEventListener('click', function(){ showRaiseModal(b.getAttribute('data-raise')); }); });
+    sec.querySelectorAll('button[data-hist]').forEach(function(b){
+      b.addEventListener('click', function(){ showWageHistory(b.getAttribute('data-hist')); }); });
     $('#saveRoster', sec).addEventListener('click', saveStaff);
     $('#savePins', sec).addEventListener('click', savePINs);
     $('#addStaff', sec).addEventListener('click', function(){
-      STATE.staff.push({ name: 'New Employee', store: 'south', division: 'S', roleType: 'tech', fte: 1, pin: '', queue: '' });
+      STATE.staff.push({ name: 'New Employee', store: 'south', division: 'S', roleType: 'tech',
+        fte: 1, pin: '', queue: '', payRate: 0, payType: 'Hourly', vacationWeeks: 0, payHistory: [], active: true });
       saveStaff().then(function(){ go('staff'); });
     });
   }
 };
 
-function showPayHistory(name){
+/* ---- Edit employee: wage, pay type, FTE, vacation ---- */
+function showEditStaff(name){
+  var s = staffRec(name); if (!s) return;
+  modal('Edit — ' + name,
+    '<div class="form-grid">' +
+      '<label class="fld"><span>Store</span><select id="eStore">' +
+        '<option value="south"' + (s.store==='south'?' selected':'') + '>South Store</option>' +
+        '<option value="north"' + (s.store==='north'?' selected':'') + '>North Store</option></select></label>' +
+      '<label class="fld"><span>Role</span><select id="eRole">' +
+        ['tech','support','manager','admin'].map(function(r){ return '<option value="'+r+'"'+(s.roleType===r?' selected':'')+'>'+r+'</option>'; }).join('') +
+        '</select></label>' +
+      '<label class="fld"><span>Pay type</span><select id="ePayType">' +
+        '<option value="Hourly"' + ((s.payType||'Hourly')==='Hourly'?' selected':'') + '>Hourly</option>' +
+        '<option value="Salary"' + (s.payType==='Salary'?' selected':'') + '>Salary</option></select></label>' +
+      '<label class="fld"><span id="eRateLbl">Hourly rate $</span><input type="number" step="0.01" id="eRate" value="' + num(s.payRate) + '"></label>' +
+      '<label class="fld"><span>FTE</span><input type="number" step="0.1" id="eFte" value="' + (s.fte==null?1:s.fte) + '"></label>' +
+      '<label class="fld"><span>Vacation (weeks)</span><input type="number" step="0.5" id="eVac" value="' + (s.vacationWeeks||0) + '"></label>' +
+    '</div>' +
+    '<div id="eAnnual" class="stat ok" style="margin:4px 0 14px"></div>' +
+    '<div class="flex gap" style="justify-content:flex-end">' +
+      '<button class="btn btn-ghost" id="eInactive">' + (s.active===false?'Reactivate':'Mark inactive') + '</button>' +
+      '<button class="btn btn-primary" id="eSave">Save changes</button></div>',
+  function(box){
+    function preview(){
+      var tmp = { payRate: num($('#eRate',box).value), payType: $('#ePayType',box).value, fte: num($('#eFte',box).value) };
+      $('#eRateLbl',box).textContent = tmp.payType === 'Salary' ? 'Annual salary $' : 'Hourly rate $';
+      $('#eAnnual',box).innerHTML = '<div class="label">Approx. annual income</div><div class="value" style="font-size:24px">' +
+        money(annualIncome(tmp)) + '</div><div class="meta">' + ($('#eVac',box).value||0) + ' weeks vacation</div>';
+    }
+    ['eRate','ePayType','eFte','eVac'].forEach(function(id){ $('#'+id,box).addEventListener('input', preview); });
+    preview();
+    $('#eInactive',box).addEventListener('click', function(){
+      s.active = (s.active === false); // toggle
+      saveStaff().then(function(){ closeModal(); go('staff'); });
+    });
+    $('#eSave',box).addEventListener('click', function(){
+      s.store = $('#eStore',box).value; s.division = storeDivision(s.store);
+      s.roleType = $('#eRole',box).value;
+      s.payType = $('#ePayType',box).value;
+      s.payRate = num($('#eRate',box).value);
+      s.fte = num($('#eFte',box).value);
+      s.vacationWeeks = num($('#eVac',box).value);
+      saveStaff().then(function(){ closeModal(); go('staff'); });
+    });
+  });
+}
+
+/* ---- Raise: annual / performance increase with live % ---- */
+function showRaiseModal(name){
+  var s = staffRec(name); if (!s) return;
+  var isSalary = (s.payType === 'Salary');
+  var unit = isSalary ? '/yr' : '/hr';
+  var old = num(s.payRate);
+  modal('Raise — ' + name,
+    '<div class="muted" style="margin-bottom:12px">Current: <b>' + (isSalary ? money(old) : money2(old)) + unit +
+      '</b> · approx. annual <b>' + money(annualIncome(s)) + '</b></div>' +
+    '<div class="form-grid">' +
+      '<label class="fld"><span>Increase %</span><input type="number" step="0.1" id="rPct" placeholder="e.g. 3"></label>' +
+      '<label class="fld"><span>New rate ' + unit + '</span><input type="number" step="0.01" id="rNew" value="' + old + '"></label>' +
+      '<label class="fld"><span>Type</span><select id="rType">' +
+        '<option>Annual increase</option><option>Performance increase</option><option>Promotion</option><option>Market adjustment</option><option>Other</option>' +
+        '</select></label>' +
+      '<label class="fld"><span>Effective date</span><input type="text" id="rDate" value="' + todayStr() + '"></label>' +
+    '</div>' +
+    '<label class="fld"><span>Note (optional)</span><input type="text" id="rNote" placeholder="reason / details"></label>' +
+    '<div id="rOut" class="stat" style="margin:4px 0 14px"></div>' +
+    '<div style="text-align:right"><button class="btn btn-primary" id="rSave">Apply raise</button></div>',
+  function(box){
+    var lastEdited = 'pct';
+    function recompute(src){
+      if (src) lastEdited = src;
+      var newRate;
+      if (lastEdited === 'pct') {
+        var pct = num($('#rPct',box).value);
+        newRate = old * (1 + pct/100);
+        $('#rNew',box).value = (Math.round(newRate*100)/100);
+      } else {
+        newRate = num($('#rNew',box).value);
+        var p = old > 0 ? (newRate - old)/old*100 : 0;
+        $('#rPct',box).value = (Math.round(p*10)/10);
+      }
+      var pctChange = old > 0 ? (newRate - old)/old*100 : 0;
+      var tmpNew = { payRate: newRate, payType: s.payType, fte: s.fte };
+      var deltaAnnual = annualIncome(tmpNew) - annualIncome(s);
+      var good = pctChange >= 0;
+      $('#rOut',box).className = 'stat ' + (good ? 'ok' : 'bad');
+      $('#rOut',box).innerHTML =
+        '<div class="label">New ' + (isSalary?'salary':'rate') + ' & change</div>' +
+        '<div class="value" style="font-size:24px">' + (isSalary?money(newRate):money2(newRate)) + unit +
+          ' <span style="font-size:16px;color:' + (good?'var(--ok)':'var(--bad)') + '">(' + (good?'+':'') + pctChange.toFixed(1) + '%)</span></div>' +
+        '<div class="meta">New approx. annual ' + money(annualIncome(tmpNew)) +
+          ' · ' + (deltaAnnual>=0?'+':'') + money(deltaAnnual) + '/yr</div>';
+    }
+    $('#rPct',box).addEventListener('input', function(){ recompute('pct'); });
+    $('#rNew',box).addEventListener('input', function(){ recompute('new'); });
+    recompute();
+    $('#rSave',box).addEventListener('click', function(){
+      var newRate = num($('#rNew',box).value);
+      var pctChange = old > 0 ? (newRate - old)/old*100 : 0;
+      s.payHistory = s.payHistory || [];
+      s.payHistory.push({ date: $('#rDate',box).value, oldRate: old, newRate: newRate,
+        pctChange: pctChange.toFixed(1), note: ($('#rType',box).value + ($('#rNote',box).value ? ' — ' + $('#rNote',box).value : '')) });
+      s.payRate = newRate;
+      saveStaff().then(function(){ closeModal(); go('staff'); });
+    });
+  });
+}
+
+/* ---- Wage history (rate changes) + bonus payments ---- */
+function showWageHistory(name){
+  var s = staffRec(name);
+  var ph = (s && s.payHistory) || [];
+  var rateRows = ph.length ? ph.slice().reverse().map(function(h){
+    var pc = h.pctChange != null && h.pctChange !== '' ? h.pctChange + '%' : '';
+    return '<tr><td>' + esc(h.date) + '</td><td class="num">' + (h.oldRate?money2(h.oldRate):'—') + '</td>' +
+      '<td class="num">' + money2(h.newRate) + '</td><td class="num ' + (parseFloat(h.pctChange)>=0?'cell-ok':'cell-bad') + '">' + pc + '</td>' +
+      '<td>' + esc(h.note||'') + '</td></tr>';
+  }).join('') : '<tr><td colspan="5" class="muted">No wage changes recorded.</td></tr>';
+
   var pays = STATE.kpi.payments.filter(function(p){ return p.employee === name; });
-  var rows = pays.length ? pays.map(function(p){
+  var payRows = pays.length ? pays.slice().reverse().map(function(p){
     return '<tr><td>' + esc(p.date) + '</td><td>' + esc(periodLabel(p.period)) + '</td><td class="num">' + money2(p.amount) + '</td><td>' + esc(p.note||'') + '</td></tr>';
-  }).join('') : '<tr><td colspan="4" class="muted">No payments recorded.</td></tr>';
-  var total = pays.reduce(function(a,p){ return a + num(p.amount); }, 0);
-  modal('Pay History — ' + name,
+  }).join('') : '<tr><td colspan="4" class="muted">No bonus payments recorded.</td></tr>';
+
+  modal('History — ' + name,
+    '<h3 style="font-size:16px;margin-bottom:8px">Wage changes</h3>' +
+    '<div class="table-wrap"><table><thead><tr><th>Date</th><th class="num">From</th><th class="num">To</th><th class="num">%</th><th>Reason</th></tr></thead><tbody>' +
+    rateRows + '</tbody></table></div>' +
+    '<h3 style="font-size:16px;margin:18px 0 8px">Bonus payments</h3>' +
     '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Period</th><th class="num">Amount</th><th>Note</th></tr></thead><tbody>' +
-    rows + '</tbody></table></div><div style="margin-top:12px;text-align:right"><b>Total paid: ' + money2(total) + '</b></div>');
+    payRows + '</tbody></table></div>');
 }
 
 /* ---- Payroll Summary ---- */
@@ -1270,10 +1440,26 @@ function closeModal(){ var m = $('#__modal'); if (m) m.parentNode.removeChild(m)
 function buildPeriodPicker(){
   var sel = $('#qSel'); sel.innerHTML = '';
   PERIODS.forEach(function(p){ sel.appendChild(el('option', { value: p.key }, p.label)); });
-  // default to Q2 (today is mid-Q2 2026); fall back to first
+  // provisional default (refined to latest-with-data after loadAll)
   CURRENT_PERIOD = (PERIODS[1] || PERIODS[0]).key;
   sel.value = CURRENT_PERIOD;
   sel.addEventListener('change', function(){ CURRENT_PERIOD = sel.value; if (CURRENT_PAGE) go(CURRENT_PAGE); });
+}
+
+// Latest period that actually has entered quarter data (for either store).
+function latestPeriodWithData(){
+  for (var i = PERIODS.length - 1; i >= 0; i--) {
+    var q = STATE.kpi.quarters[PERIODS[i].key];
+    if (q && (q.south || q.north)) return PERIODS[i].key;
+  }
+  return null;
+}
+function applyDefaultPeriod(){
+  var def = latestPeriodWithData();
+  if (def) {
+    CURRENT_PERIOD = def;
+    var sel = $('#qSel'); if (sel) sel.value = def;
+  }
 }
 
 function init(){
@@ -1283,7 +1469,7 @@ function init(){
   $('#reloadBtn').addEventListener('click', function(){ loadAll().then(function(){ if (CURRENT_PAGE) go(CURRENT_PAGE); }); });
   buildPeriodPicker();
   buildNav();
-  loadAll().then(function(){ go(landingPage()); });
+  loadAll().then(function(){ applyDefaultPeriod(); go(landingPage()); });
 }
 
 init();
