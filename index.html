@@ -58,11 +58,14 @@
   .divider{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;margin:18px 0}
   .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
 
-  .manual{margin-top:14px}
+  .manual{margin-top:6px}
   .manual input{
     width:100%;padding:12px;border:1px solid var(--line);border-radius:9px;font-size:14px;
-    font-family:inherit;margin-bottom:10px;
+    font-family:inherit;margin-bottom:12px;
   }
+  .fldlabel{display:block;font-size:12px;font-weight:600;color:var(--muted);margin:4px 2px 6px;
+    text-transform:uppercase;letter-spacing:.5px}
+  #signinBtn{margin-top:2px}
 
   /* PIN keypad */
   .pin-dots{display:flex;justify-content:center;gap:14px;margin:6px 0 20px}
@@ -121,42 +124,17 @@
     <div class="body">
       <!-- ============ LOGIN ============ -->
       <div id="login">
-        <div class="tabs">
-          <div class="tab active" data-tab="mgr">Manager</div>
-          <div class="tab" data-tab="staff">Tech / Support</div>
+        <div class="manual">
+          <label class="fldlabel" for="idInput">HPE email or Employee #</label>
+          <input id="idInput" type="text" placeholder="name@hydeparkequipment.ca  or  S043" autocomplete="username" autofocus>
+          <label class="fldlabel" for="passInput">Passcode</label>
+          <input id="passInput" type="password" inputmode="numeric" placeholder="••••" autocomplete="current-password">
+          <button class="btn btn-primary" id="signinBtn">Sign in</button>
         </div>
-
-        <!-- Manager (Google email) -->
-        <div class="pane active" id="pane-mgr">
-          <button class="btn btn-google" id="googleBtn">
-            <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-            <span>Sign in with Google</span>
-          </button>
-          <div class="hint">Managers &amp; admins sign in with their <b>@hydeparkequipment.ca</b> Google account.</div>
-
-          <div class="divider">or sign in manually</div>
-          <div class="manual">
-            <input id="emailInput" type="email" placeholder="name@hydeparkequipment.ca" autocomplete="email">
-            <button class="btn btn-primary" id="emailBtn">Continue</button>
-          </div>
+        <div class="hint">
+          Managers &amp; admins use their <b>@hydeparkequipment.ca</b> email.
+          Technicians &amp; support use their <b>employee number</b>. Your passcode is set by an admin.
         </div>
-
-        <!-- Tech / Support (PIN) -->
-        <div class="pane" id="pane-staff">
-          <div class="pin-dots" id="pinDots">
-            <div class="dot"></div><div class="dot"></div><div class="dot"></div><div class="dot"></div>
-          </div>
-          <div class="keys" id="keys">
-            <div class="key" data-k="1">1</div><div class="key" data-k="2">2</div><div class="key" data-k="3">3</div>
-            <div class="key" data-k="4">4</div><div class="key" data-k="5">5</div><div class="key" data-k="6">6</div>
-            <div class="key" data-k="7">7</div><div class="key" data-k="8">8</div><div class="key" data-k="9">9</div>
-            <div class="key action" data-k="clear">Clear</div>
-            <div class="key" data-k="0">0</div>
-            <div class="key action" data-k="back">&larr;</div>
-          </div>
-          <div class="hint">Enter your 4-digit PIN. Don’t have one? Ask your manager.</div>
-        </div>
-
         <div class="msg" id="msg"></div>
       </div>
 
@@ -190,64 +168,19 @@
     }
     function clearMsg(){ msg.className='msg'; msg.textContent=''; }
 
-    /* ---- tab switching ---- */
-    document.querySelectorAll('.tab').forEach(function(t){
-      t.addEventListener('click', function(){
-        document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('active');});
-        document.querySelectorAll('.pane').forEach(function(x){x.classList.remove('active');});
-        t.classList.add('active');
-        $('pane-' + t.dataset.tab).classList.add('active');
-        clearMsg();
-      });
-    });
-
-    /* ---- Google login ---- */
-    $('googleBtn').addEventListener('click', function(){
+    /* ---- unified sign-in (email or employee number + passcode) ---- */
+    function doSignIn(){
       clearMsg();
-      var btn=this; btn.disabled=true;
-      var label=btn.querySelector('span'); var old=label.textContent;
-      label.innerHTML='<span class="spinner"></span>';
-      AUTH.loginWithGoogle().then(enterHub).catch(function(e){
+      var id = $('idInput').value, pass = $('passInput').value;
+      var btn = $('signinBtn'); var old = btn.textContent;
+      btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+      AUTH.login(id, pass).then(enterHub).catch(function(e){
         showMsg(e.message || 'Sign-in failed.');
-      }).then(function(){ btn.disabled=false; label.textContent=old; });
-    });
-
-    /* ---- manual email ---- */
-    $('emailBtn').addEventListener('click', function(){
-      clearMsg();
-      try { enterHub(AUTH.resolveEmail($('emailInput').value)); }
-      catch(e){ showMsg(e.message); }
-    });
-    $('emailInput').addEventListener('keydown', function(e){ if(e.key==='Enter') $('emailBtn').click(); });
-
-    /* ---- PIN keypad ---- */
-    var pin='';
-    function renderPin(){
-      var dots=$('pinDots').children;
-      for(var i=0;i<4;i++) dots[i].classList.toggle('on', i<pin.length);
+      }).then(function(){ btn.disabled = false; btn.textContent = old; });
     }
-    $('keys').addEventListener('click', function(e){
-      var k=e.target.closest('.key'); if(!k) return;
-      var v=k.dataset.k;
-      if(v==='clear'){ pin=''; }
-      else if(v==='back'){ pin=pin.slice(0,-1); }
-      else if(/^\d$/.test(v) && pin.length<4){ pin+=v; }
-      renderPin();
-      clearMsg();
-      if(pin.length===4) submitPin();
-    });
-    document.addEventListener('keydown', function(e){
-      if(!$('pane-staff').classList.contains('active')) return;
-      if(/^\d$/.test(e.key) && pin.length<4){ pin+=e.key; renderPin(); if(pin.length===4) submitPin(); }
-      else if(e.key==='Backspace'){ pin=pin.slice(0,-1); renderPin(); }
-    });
-    function submitPin(){
-      var attempt=pin;
-      AUTH.loginWithPIN(attempt).then(enterHub).catch(function(err){
-        showMsg(err.message || 'PIN not recognized.');
-        pin=''; renderPin();
-      });
-    }
+    $('signinBtn').addEventListener('click', doSignIn);
+    $('idInput').addEventListener('keydown', function(e){ if(e.key==='Enter') $('passInput').focus(); });
+    $('passInput').addEventListener('keydown', function(e){ if(e.key==='Enter') doSignIn(); });
 
     /* ---- module hub ---- */
     var MODULES = [

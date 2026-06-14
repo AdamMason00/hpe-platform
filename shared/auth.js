@@ -38,68 +38,83 @@
   function isTech(sess)    { return !!sess && sess.role === 'tech'; }
   function isSupport(sess) { return !!sess && sess.role === 'support'; }
 
-  /* ---- Tier 1: Google email login -------------------------------
-   * Asks the backend who the active Google user is. If the backend is
-   * unreachable, falls back to a manually-entered email checked against
-   * the local roster so managers are never locked out.
+  /* ---- roster loader (backend, falling back to local defaults) --- */
+  function loadRoster() {
+    if (!API) return Promise.resolve(CFG.DEFAULT_STAFF || []);
+    return API.loadStaff().then(function (r) {
+      var s = (r && (r.staff || r.data)) || [];
+      return s.length ? s : (CFG.DEFAULT_STAFF || []);
+    }).catch(function () { return CFG.DEFAULT_STAFF || []; });
+  }
+
+  function findByEmail(staff, email) {
+    email = email.toLowerCase();
+    for (var i = 0; i < staff.length; i++) {
+      if (staff[i] && String(staff[i].email || '').toLowerCase() === email) return staff[i];
+    }
+    return null;
+  }
+  function findByName(staff, name) {
+    name = String(name || '').toLowerCase();
+    for (var i = 0; i < staff.length; i++) {
+      if (staff[i] && String(staff[i].name || '').toLowerCase() === name) return staff[i];
+    }
+    return null;
+  }
+  function findByEmpNum(staff, num) {
+    num = String(num || '').trim().toUpperCase();
+    for (var i = 0; i < staff.length; i++) {
+      if (staff[i] && String(staff[i].empNum || '').trim().toUpperCase() === num && num) return staff[i];
+    }
+    return null;
+  }
+
+  /* ---- Unified login --------------------------------------------
+   * identifier = HPE email (managers/admin) OR employee number (techs/
+   * support). passcode = the person's PIN. The passcode is only enforced
+   * when the person actually has a PIN set, so nobody is locked out before
+   * PINs are assigned. Returns the new session.
    * --------------------------------------------------------------- */
-  function loginWithGoogle() {
-    if (!API) return Promise.reject(new Error('API not loaded'));
-    return API.getUser().then(function (res) {
-      var email = (res && (res.email || (res.user && res.user.email))) || '';
-      return resolveEmail(email);
+  function login(identifier, passcode) {
+    identifier = (identifier || '').toString().trim();
+    passcode   = (passcode   || '').toString().trim();
+    if (!identifier) return Promise.reject(new Error('Enter your HPE email or employee number.'));
+    return loadRoster().then(function (staff) {
+      return (identifier.indexOf('@') !== -1)
+        ? emailLogin(identifier.toLowerCase(), passcode, staff)
+        : empNumLogin(identifier, passcode, staff);
     });
   }
 
-  // Resolve an email -> session (used by Google login and the fallback).
-  function resolveEmail(email) {
-    email = (email || '').toString().trim().toLowerCase();
-    if (!email) throw new Error('No Google account detected. Use the manual sign-in or a PIN.');
-    var u = CFG.userForEmail(email);
-    if (!u) throw new Error('“' + email + '” is not authorized as a manager. Ask an admin to add you, or use a PIN.');
+  function checkPasscode(rec, passcode) {
+    var pin = rec ? String(rec.pin || '').trim() : '';
+    if (pin && passcode !== pin) throw new Error('Incorrect passcode.');
+  }
+
+  function emailLogin(email, passcode, staff) {
+    var u = CFG.userForEmail(email);                 // privileged role/store, if any
+    var rec = findByEmail(staff, email) || (u && findByName(staff, u.name)) || null;
+    if (!u && !rec) throw new Error('“' + email + '” is not authorized. Check the address, or sign in with your employee number.');
+    checkPasscode(rec, passcode);
     return setSession({
-      tier: 'email',
-      email: email,
-      name: u.name,
-      role: u.role,            // 'admin' | 'manager'
-      store: u.store,          // 'south' | 'north' | null
+      tier: 'email', email: email,
+      name:  u ? u.name  : rec.name,
+      role:  u ? u.role  : (rec.roleType || 'manager'),
+      store: u ? u.store : rec.store,
+      empNum: rec ? (rec.empNum || '') : '',
       ts: Date.now()
     });
   }
 
-  /* ---- Tier 2: PIN login ----------------------------------------
-   * Loads the staff roster (with PINs) from the backend and matches the
-   * entered 4-digit PIN. Falls back to HPE_CONFIG.DEFAULT_STAFF only if
-   * those defaults have PINs assigned (normally they won't until an admin
-   * sets them, so a backend round-trip is expected).
-   * --------------------------------------------------------------- */
-  function loginWithPIN(pin) {
-    pin = (pin || '').toString().trim();
-    if (!/^\d{4}$/.test(pin)) {
-      return Promise.reject(new Error('Enter a 4-digit PIN.'));
-    }
-    var loadStaff = API ? API.loadStaff().then(function (r) {
-      return (r && (r.staff || r.data)) || [];
-    }).catch(function () { return CFG.DEFAULT_STAFF || []; })
-      : Promise.resolve(CFG.DEFAULT_STAFF || []);
-
-    return loadStaff.then(function (staff) {
-      var match = null;
-      for (var i = 0; i < staff.length; i++) {
-        if (staff[i] && String(staff[i].pin || '').trim() === pin) { match = staff[i]; break; }
-      }
-      if (!match) throw new Error('PIN not recognized. Check with your manager.');
-      var queues = (match.queue ? [match.queue] : (CFG.queuesForStaff ? CFG.queuesForStaff(match.name) : []));
-      return setSession({
-        tier: 'pin',
-        name: match.name,
-        role: match.roleType || 'tech',   // 'tech' | 'support' | 'admin'
-        store: match.store,
-        division: match.division,
-        fte: match.fte,
-        queues: queues,
-        ts: Date.now()
-      });
+  function empNumLogin(num, passcode, staff) {
+    var rec = findByEmpNum(staff, num);
+    if (!rec) throw new Error('Employee number “' + num + '” not recognized. Check with your manager.');
+    checkPasscode(rec, passcode);
+    var queues = (rec.queue ? [rec.queue] : (CFG.queuesForStaff ? CFG.queuesForStaff(rec.name) : []));
+    return setSession({
+      tier: 'empnum', name: rec.name,
+      role: rec.roleType || 'tech', store: rec.store, division: rec.division,
+      fte: rec.fte, queues: queues, empNum: rec.empNum, ts: Date.now()
     });
   }
 
@@ -123,9 +138,7 @@
     getSession: getSession,
     setSession: setSession,
     clearSession: clearSession,
-    loginWithGoogle: loginWithGoogle,
-    resolveEmail: resolveEmail,
-    loginWithPIN: loginWithPIN,
+    login: login,
     requireSession: requireSession,
     logout: logout,
     isAdmin: isAdmin,

@@ -136,7 +136,9 @@ function normaliseStaff(arr){
       vacationWeeks: s.vacationWeeks == null ? 0 : Number(s.vacationWeeks),
       payHistory: Array.isArray(s.payHistory) ? s.payHistory : [],
       active: s.active !== false,
-      effName: s.effName || ''   // Labour-data name override for efficiency linkage
+      effName: s.effName || '',  // Labour-data name override for efficiency linkage
+      empNum: s.empNum == null ? '' : String(s.empNum).trim(),
+      email: s.email || ''
     };
   });
 }
@@ -574,13 +576,14 @@ RENDER.staff = function(sec){
     '</div>';
 
   html += '<div class="table-wrap"><table><thead><tr>' +
-    '<th>Name</th><th>Store</th><th>Role</th><th class="num">FTE</th>' +
+    '<th>Name</th><th>Emp #</th><th>Store</th><th>Role</th><th class="num">FTE</th>' +
     '<th class="num">Wage</th><th class="num">Approx. Annual</th><th class="num">Vac (wks)</th>' +
     (admin ? '<th class="num">PIN</th><th>Actions</th>' : '') + '</tr></thead><tbody>';
   roster.forEach(function(s){
     var inactive = s.active === false;
     html += '<tr' + (inactive ? ' style="opacity:.5"' : '') + '><td><b>' + esc(s.name) + '</b>' +
         (inactive ? ' <span class="pill muted">inactive</span>' : '') + '</td>' +
+      '<td class="mono">' + (s.empNum ? esc(s.empNum) : (s.email ? '<span class="muted" title="' + esc(s.email) + '">email</span>' : '<span class="muted">—</span>')) + '</td>' +
       '<td>' + storeName(s.store) + '</td>' +
       '<td><span class="pill muted">' + esc(s.roleType) + '</span></td>' +
       '<td class="num">' + s.fte + '</td>' +
@@ -645,6 +648,8 @@ function showEditStaff(name){
       '<label class="fld"><span id="eRateLbl">Hourly rate $</span><input type="number" step="0.01" id="eRate" value="' + num(s.payRate) + '"></label>' +
       '<label class="fld"><span>FTE</span><input type="number" step="0.1" id="eFte" value="' + (s.fte==null?1:s.fte) + '"></label>' +
       '<label class="fld"><span>Vacation (weeks)</span><input type="number" step="0.5" id="eVac" value="' + (s.vacationWeeks||0) + '"></label>' +
+      '<label class="fld"><span>Employee # (for login &amp; efficiency join)</span><input type="text" id="eEmpNum" value="' + esc(s.empNum || '') + '" placeholder="e.g. S043"></label>' +
+      '<label class="fld"><span>Email (managers/admin login)</span><input type="email" id="eEmail" value="' + esc(s.email || '') + '" placeholder="name@hydeparkequipment.ca"></label>' +
       '<label class="fld" style="grid-column:1 / -1"><span>Labour-data name (override — only if efficiency doesn’t auto-match)</span>' +
         '<input type="text" id="eEffName" value="' + esc(s.effName || '') + '" placeholder="e.g. NATHAN VERBURG"></label>' +
     '</div>' +
@@ -672,8 +677,10 @@ function showEditStaff(name){
       s.payRate = num($('#eRate',box).value);
       s.fte = num($('#eFte',box).value);
       s.vacationWeeks = num($('#eVac',box).value);
+      s.empNum = $('#eEmpNum',box).value.trim();
+      s.email = $('#eEmail',box).value.trim();
       s.effName = $('#eEffName',box).value.trim();
-      rebuildEfficiencyIndex();   // re-link efficiency with the new override
+      rebuildEfficiencyIndex();   // re-link efficiency with the new empNum / override
       saveStaff().then(function(){ closeModal(); go('staff'); });
     });
   });
@@ -1248,9 +1255,10 @@ function handleEfficiencyFile(rows){
     if (reported <= 0 && billed <= 0) return;
     var name = String(pick(r, ['Employee Name','Employee','Name'])).trim();
     var div  = String(pick(r, ['Employee Division','Division','Div'])).trim().toUpperCase().charAt(0);
+    var empNum = String(pick(r, ['Employee#','Employee #','Emp#','Employee Number','Emp Number'])).trim();
     out.push({
       month: normMonth(pick(r, ['Month','Period'])),
-      name: name, division: div,
+      name: name, empNum: empNum, division: div,
       docNum: String(pick(r, ['Document#','Document #','Doc#','Document Number'])).trim(),
       reported: reported, billed: billed,
       eff: reported > 0 ? (billed / reported * 100) : 0
@@ -1282,6 +1290,16 @@ function ingestEfficiency(rows, when){
 function nameTokens(name){
   return String(name || '').toUpperCase().replace(/[^A-Z\s]/g, ' ').split(/\s+/).filter(Boolean);
 }
+// Resolve an efficiency row to its roster display name. Primary join is the
+// employee number; name-matching is the fallback / bootstrap.
+function rosterForEmpNum(empNum){
+  empNum = String(empNum || '').trim().toUpperCase();
+  if (!empNum) return null;
+  for (var i = 0; i < STATE.staff.length; i++) {
+    if (String(STATE.staff[i].empNum || '').trim().toUpperCase() === empNum) return STATE.staff[i];
+  }
+  return null;
+}
 function rosterDisplayForLabour(labourName){
   var toks = nameTokens(labourName);
   if (!toks.length) return labourName;
@@ -1309,8 +1327,9 @@ function rosterDisplayForLabour(labourName){
 function rebuildEfficiencyIndex(){
   var by = {};
   (STATE.efficiency.rows || []).forEach(function(r){
-    if (!r.name) return;
-    r.display = rosterDisplayForLabour(r.name);   // tag the row with its roster name
+    if (!r.name && !r.empNum) return;
+    var rec = rosterForEmpNum(r.empNum);          // 1. join by employee number
+    r.display = rec ? rec.name : rosterDisplayForLabour(r.name);  // 2. fall back to name
     by[r.display] = by[r.display] || {};
     by[r.display][r.month] = by[r.display][r.month] || { reported: 0, billed: 0 };
     by[r.display][r.month].reported += r.reported;

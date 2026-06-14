@@ -103,25 +103,25 @@
    * ------------------------------------------------------------- */
   var DEFAULT_STAFF = [
     // ---- South techs ----
-    { name: 'Jared Lobban',     store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 43,    payType: 'Hourly', active: true },
-    { name: 'John Reiger',      store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 36,    payType: 'Hourly', active: true },
-    { name: 'Tyler Nicholson',  store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 32,    payType: 'Hourly', active: true },
-    { name: 'Caden Koetsier',   store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 26,    payType: 'Hourly', active: true },
-    { name: 'Ed Kindt',         store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 35.75, payType: 'Hourly', active: true },
-    { name: 'Al Monck',         store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', payRate: 28.5,  payType: 'Hourly', active: true },
-    { name: 'Logan Hardman',    store: 'south', division: 'S', roleType: 'tech',    fte: 0.5, pin: '', payRate: 19,    payType: 'Hourly', active: true },
-    { name: 'Tyler Mcdougall',  store: 'south', division: 'S', roleType: 'tech',    fte: 0.5, pin: '', payRate: 19,    payType: 'Hourly', active: true },
+    { name: 'Jared Lobban',     store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', empNum: 'S043', payRate: 43,    payType: 'Hourly', active: true },
+    { name: 'John Reiger',      store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', empNum: 'S077', payRate: 36,    payType: 'Hourly', active: true },
+    { name: 'Tyler Nicholson',  store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', empNum: 'S079', payRate: 32,    payType: 'Hourly', active: true },
+    { name: 'Caden Koetsier',   store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', empNum: 'S076', payRate: 26,    payType: 'Hourly', active: true },
+    { name: 'Ed Kindt',         store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', empNum: 'S036', payRate: 35.75, payType: 'Hourly', active: true },
+    { name: 'Al Monck',         store: 'south', division: 'S', roleType: 'tech',    fte: 1.0, pin: '', empNum: 'S009', payRate: 28.5,  payType: 'Hourly', active: true },
+    { name: 'Logan Hardman',    store: 'south', division: 'S', roleType: 'tech',    fte: 0.5, pin: '', empNum: 'S080', payRate: 19,    payType: 'Hourly', active: true },
+    { name: 'Tyler Mcdougall',  store: 'south', division: 'S', roleType: 'tech',    fte: 0.5, pin: '', empNum: '',     payRate: 19,    payType: 'Hourly', active: true },
     // ---- South support ----
     { name: 'Stew Brooks',      store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', payRate: 27,    payType: 'Hourly', active: true, queue: 'WS' },
     { name: 'Amy',              store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', payRate: 30.5,  payType: 'Hourly', active: true, queue: 'IS' },
     { name: 'Matt Berkelmans',  store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', payRate: 28.5,  payType: 'Hourly', active: true, queue: 'IS' },
     { name: 'Thorin Wilson',    store: 'south', division: 'S', roleType: 'support', fte: 1.0, pin: '', payRate: 29,    payType: 'Hourly', active: true, queue: 'IS' },
     // ---- North techs ----
-    { name: 'Alex Beer',        store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', payRate: 40,    payType: 'Hourly', active: true },
-    { name: 'Andrew Muma',      store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', payRate: 37,    payType: 'Hourly', active: true },
-    { name: 'Don Raes',         store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', payRate: 40,    payType: 'Hourly', active: true },
-    { name: 'Pat Schaffner',    store: 'north', division: 'M', roleType: 'tech',    fte: 0.5, pin: '', payRate: 35,    payType: 'Hourly', active: true },
-    { name: 'Nate',             store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', active: false },
+    { name: 'Alex Beer',        store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', empNum: 'S070', payRate: 40,    payType: 'Hourly', active: true },
+    { name: 'Andrew Muma',      store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', empNum: '029',  payRate: 37,    payType: 'Hourly', active: true },
+    { name: 'Don Raes',         store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', empNum: '045',  payRate: 40,    payType: 'Hourly', active: true },
+    { name: 'Pat Schaffner',    store: 'north', division: 'M', roleType: 'tech',    fte: 0.5, pin: '', empNum: '',     payRate: 35,    payType: 'Hourly', active: true },
+    { name: 'Nate',             store: 'north', division: 'M', roleType: 'tech',    fte: 1.0, pin: '', empNum: '053', effName: 'NATHAN VERBURG', active: false },
     // ---- North support ----
     { name: 'Paul Lopez',       store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', payRate: 25,    payType: 'Hourly', active: true, queue: 'IM' },
     { name: 'Zach Noble-Welch', store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', payRate: 25,    payType: 'Hourly', active: true, queue: 'IM' },
@@ -132,8 +132,8 @@
     // ---- Office admin ----
     { name: 'Mell Hogg',        store: 'south', division: 'S', roleType: 'admin',   fte: 1.0, pin: '', payRate: 58000, payType: 'Salary', active: true },
     // ---- Managers (also email-auth Tier 1) ----
-    { name: 'Steve Hayes',      store: 'south', division: 'S', roleType: 'manager', fte: 1.0, pin: '', payRate: 100000, payType: 'Salary', active: true },
-    { name: 'Bill Denison',     store: 'north', division: 'M', roleType: 'manager', fte: 1.0, pin: '', payRate: 97000,  payType: 'Salary', active: true }
+    { name: 'Steve Hayes',      store: 'south', division: 'S', roleType: 'manager', fte: 1.0, pin: '', email: 'steve@hydeparkequipment.ca', payRate: 100000, payType: 'Salary', active: true },
+    { name: 'Bill Denison',     store: 'north', division: 'M', roleType: 'manager', fte: 1.0, pin: '', email: 'bill@hydeparkequipment.ca',  payRate: 97000,  payType: 'Salary', active: true }
   ];
 
   /* ---------------------------------------------------------------

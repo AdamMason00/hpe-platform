@@ -305,11 +305,16 @@ function migrateFromLegacy() {
   var staff = mapLegacyStaff_(legacy.employees);
   var eff = effBlob ? mapLegacyEfficiency_(effBlob) : { rows: [], uploadedAt: stamp() };
 
+  // Assign each tech's Labour employee number onto their roster record by
+  // name-matching the efficiency entries, so login-by-employee-number and
+  // empNum-based efficiency joins work.
+  var seeded = effBlob ? seedEmpNums_(staff, effBlob) : 0;
+
   writeBlob('KPI', kpi);
   writeBlob('Staff', { staff: staff });
   writeBlob('Efficiency', eff);
   logChange('migration', 'migrateFromLegacy',
-    staff.length + ' staff, ' + Object.keys(kpi.quarters).length + ' quarters, ' + eff.rows.length + ' eff rows');
+    staff.length + ' staff (' + seeded + ' empNums), ' + Object.keys(kpi.quarters).length + ' quarters, ' + eff.rows.length + ' eff rows');
 
   var summary = {
     staff: staff.length,
@@ -356,6 +361,10 @@ function legacyRole_(role) {
   return 'tech';
 }
 
+var LEGACY_EMAILS = {
+  'steve hayes': 'steve@hydeparkequipment.ca',
+  'bill denison': 'bill@hydeparkequipment.ca'
+};
 function mapLegacyStaff_(employees) {
   return (employees || []).map(function (e) {
     var store = legacyStore_(e.store);
@@ -367,9 +376,13 @@ function mapLegacyStaff_(employees) {
       roleType: legacyRole_(e.role),
       fte: e.fte == null ? 1 : Number(e.fte),
       pin: e.pin == null ? '' : String(e.pin),
+      empNum: '',                                  // seeded from Labour data below
+      email: LEGACY_EMAILS[String(e.name || '').toLowerCase()] || '',
+      effName: '',
       payRate: e.payRate,
       payType: e.payType,
       payHistory: e.payHistory || [],
+      vacationWeeks: e.vacationWeeks == null ? 0 : Number(e.vacationWeeks),
       active: e.active !== false,
       queue: e.queue || ''
     };
@@ -439,6 +452,7 @@ function mapLegacyEfficiency_(effBlob) {
     if (!e || !e.months) return;
     var div = String(e.division || key.split('|').pop() || '').toUpperCase().charAt(0);
     var name = e.name || key.split('|')[1] || key;
+    var empNum = String(e.empNum || key.split('|')[0] || '').trim();
     Object.keys(e.months).forEach(function (mk) {
       var m = e.months[mk];
       var reported = numOr_(m.hrRep, 0), billed = numOr_(m.hrBil, 0);
@@ -446,13 +460,52 @@ function mapLegacyEfficiency_(effBlob) {
       var monthNum = parseInt(String(mk).slice(4, 6), 10);
       rows.push({
         month: MONTH_ABBR[monthNum - 1] || String(mk),
-        name: name, division: div, docNum: '',
+        name: name, empNum: empNum, division: div, docNum: '',
         reported: reported, billed: billed,
         eff: reported > 0 ? (billed / reported * 100) : 0
       });
     });
   });
   return { rows: rows, uploadedAt: stamp() };
+}
+
+/* Assign Labour employee numbers onto roster records by name-matching the
+ * efficiency entries. Match: first+last → first-initial+last → unique last. */
+function nameTokens_(name) {
+  return String(name || '').toUpperCase().replace(/[^A-Z\s]/g, ' ').split(/\s+/).filter(function (t) { return t; });
+}
+function matchStaffByName_(staff, labourName) {
+  var toks = nameTokens_(labourName);
+  if (!toks.length) return null;
+  var first = toks[0], last = toks[toks.length - 1];
+  var byFirstLast = null, byInitialLast = null, lastMatches = [];
+  for (var i = 0; i < staff.length; i++) {
+    var rt = nameTokens_(staff[i].name);
+    if (rt.length < 2) continue;
+    var rFirst = rt[0], rLast = rt[rt.length - 1];
+    if (rLast === last) {
+      lastMatches.push(staff[i]);
+      if (rFirst === first) byFirstLast = staff[i];
+      else if (rFirst.charAt(0) === first.charAt(0)) byInitialLast = staff[i];
+    }
+  }
+  if (byFirstLast) return byFirstLast;
+  if (byInitialLast) return byInitialLast;
+  if (lastMatches.length === 1) return lastMatches[0];
+  return null;
+}
+function seedEmpNums_(staff, effBlob) {
+  var n = 0;
+  Object.keys(effBlob).forEach(function (key) {
+    var e = effBlob[key];
+    if (!e) return;
+    var empNum = String(e.empNum || key.split('|')[0] || '').trim();
+    var labourName = e.name || key.split('|')[1] || '';
+    if (!empNum) return;
+    var rec = matchStaffByName_(staff, labourName);
+    if (rec && !rec.empNum) { rec.empNum = empNum; rec.effName = labourName; n++; }
+  });
+  return n;
 }
 
 function numOr_(v, d) { var n = parseFloat(v); return isNaN(n) ? d : n; }
