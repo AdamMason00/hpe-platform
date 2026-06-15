@@ -978,46 +978,10 @@ tr.clickable:hover td{background:#FFF3EC;cursor:pointer}
 </div>
 <div class="toast" id="toast"></div>
 
-<!-- PIN MODAL -->
-<div class="pin-overlay" id="pin-overlay" style="display:none">
-  <div class="pin-box">
-    <div class="pin-title">Management Access</div>
-    <div class="pin-sub">Enter your 4-digit PIN to continue</div>
-    <div class="pin-dots" id="pin-dots">
-      <div class="pin-dot" id="pd0"></div><div class="pin-dot" id="pd1"></div>
-      <div class="pin-dot" id="pd2"></div><div class="pin-dot" id="pd3"></div>
-    </div>
-    <div class="pin-pad">
-      <button class="pin-key" onclick="pinKey('1')">1</button>
-      <button class="pin-key" onclick="pinKey('2')">2</button>
-      <button class="pin-key" onclick="pinKey('3')">3</button>
-      <button class="pin-key" onclick="pinKey('4')">4</button>
-      <button class="pin-key" onclick="pinKey('5')">5</button>
-      <button class="pin-key" onclick="pinKey('6')">6</button>
-      <button class="pin-key" onclick="pinKey('7')">7</button>
-      <button class="pin-key" onclick="pinKey('8')">8</button>
-      <button class="pin-key" onclick="pinKey('9')">9</button>
-      <button class="pin-key" style="font-size:13px" onclick="pinClear()">&#9003;</button>
-      <button class="pin-key" onclick="pinKey('0')">0</button>
-      <button class="pin-key" style="font-size:13px;background:var(--gbg)" onclick="pinCancel()">&#10005;</button>
-    </div>
-    <div class="pin-err" id="pin-err"></div>
-  </div>
-</div>
-
-<!-- CSV LOADING OVERLAY -->
-<div class="pin-overlay" id="csv-loading" style="display:none">
-  <div class="pin-box">
-    <div style="font-size:28px;margin-bottom:12px">&#128203;</div>
-    <div class="pin-title">Loading Work Orders</div>
-    <div class="pin-sub" id="csv-load-msg">Fetching work order data...</div>
-    <div style="height:4px;background:var(--gbg);border-radius:2px;margin-top:14px;overflow:hidden">
-      <div id="csv-progress" style="height:100%;background:var(--or);border-radius:2px;width:0%;transition:width .4s"></div>
-    </div>
-  </div>
-</div>
-
-
+<!-- Shared platform auth (unified login: HPE email or employee # + passcode) -->
+<script src="../shared/config.js"></script>
+<script src="../shared/api.js"></script>
+<script src="../shared/auth.js"></script>
 <script>
 
 // -- CONFIG -------------------------------------------
@@ -1048,7 +1012,6 @@ function getTechLocation(t,prefer){
 }
 function getMgrLocation(m){return m==='Steve'?'HYD010':m==='Bill'?'HYD020':'';}
 function getSALocation(n){return n==='Stew'?'HYD010':n==='Bryan'?'HYD020':'';}
-function getSALocation(n){return n==='Stew'?'HYD010':n==='Bryan'?'HYD020':'';}
 function getMgrForTech(t){var l=getTechLocation(t);return l&&LOCATIONS[l]?LOCATIONS[l].mgr:'';}
 function getClaim(id){return CLAIMS.find(function(c){return c.id===id;});}
 function updateClaimStatus(id,s,sl,ex){
@@ -1070,9 +1033,9 @@ function refreshAll(){
   try{var irCnt=document.getElementById('ir-cnt');if(irCnt)irCnt.textContent=IR_DATA.filter(function(r){return!r.resolved;}).length;}catch(e){}
 }
 function closeModal(id){document.getElementById(id).classList.remove('open');}
-function ageDays(a){var m=a&&a.match(/(\d+)d/);return m?parseInt(m[1]):0;}
+function ageDays(a){if(a==null)return 0;if(typeof a==='number')return a;var s=String(a);var m=s.match(/(\d+)d/);return m?parseInt(m[1]):(parseInt(s)||0);}
 function ageClass(a){var d=ageDays(a);return d>=30?'age-red':d>=20?'age-warn':'age-ok';}
-function ageLabel(a){var d=ageDays(a);return d>=30?a+' FLAG':d>=20?a+' Warn':a;}
+function ageLabel(a){var d=ageDays(a);var base=(typeof a==='string'&&/\dd/.test(a))?a:(d+'d');return d>=30?base+' FLAG':d>=20?base+' Warn':base;}
 function filterByLocation(claims){
   if(!CU)return claims;
   if(CU.role==='mgr'){var myLoc=getMgrLocation(CU.name);return claims.filter(function(c){return c.loc===myLoc;});}
@@ -1152,8 +1115,8 @@ function onUserSelect(){
   if(btn)btn.disabled=!name;
 }
 
-async function doDirectLogin(){
-  var name=document.getElementById('user-sel').value;
+async function doDirectLogin(forcedName){
+  var name=forcedName||document.getElementById('user-sel').value;
   if(!name)return;
   var loadDiv=document.getElementById('csv-loading');
   var progBar=document.getElementById('csv-progress');
@@ -1233,7 +1196,6 @@ function completeLogin(name){
   if(CR==='tech')loc=getTechLocation(name);
   else if(CR==='mgr')loc=getMgrLocation(name);
   else if(CR==='sa')loc=getSALocation(name);
-  else if(CR==='sa')loc=getSALocation(name);
   CU={name:name,role:CR,init:name.slice(0,2).toUpperCase(),loc:loc};
   document.getElementById('lo').style.display='none';
   document.getElementById('app').style.display='grid';
@@ -1249,15 +1211,10 @@ function completeLogin(name){
 
 function signOut(){
   CU=null;
-  document.getElementById('lo').style.display='flex';
-  document.getElementById('app').style.display='none';
-  document.getElementById('user-sel').value='';
-  var btn=document.getElementById('login-btn');if(btn)btn.disabled=true;
-  document.getElementById('rc-mg').style.display='none';
-  // Reset chips
-  ['rc-t','rc-a','rc-sa','rc-m','rc-f','rc-mg'].forEach(function(id){var c=document.getElementById(id);if(c)c.classList.remove('on');});
-  var rt=document.getElementById('rc-t');if(rt)rt.classList.add('on');
-  selRole('tech',rt||document.getElementById('rc-t'));
+  // Unified platform logout: clear the shared session and return to the
+  // single sign-in page (HPE email or employee # + passcode).
+  if(window.HPE_AUTH){ HPE_AUTH.clearSession(); HPE_AUTH.logout('../index.html'); return; }
+  window.location.href='../index.html';
 }
 
 function setupUI(){
@@ -4971,6 +4928,46 @@ function autoDownloadLabel(claimId){
 }
 
 function showToast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(function(){t.classList.remove('show');},2700);}
+
+/* =====================================================================
+ * UNIFIED LOGIN BRIDGE
+ * The platform signs users in once (HPE email or employee # + passcode)
+ * via shared/auth.js. This page reuses that session instead of its own
+ * role-chip / PIN screen: if there's no session we bounce to the platform
+ * login; if there is one we map it to a warranty role and sign straight in.
+ * ===================================================================== */
+function mapWarrantyRole(sess){
+  var name=(sess.name||'').toLowerCase();
+  switch(sess.role){
+    case 'manager': return 'mgr';
+    case 'tech':    return 'tech';
+    case 'support': return 'sa';
+    case 'admin':
+      // Andy Van Bommel is the Warranty Admin; other admins get Management.
+      if(name.indexOf('andy')!==-1||name.indexOf('van bommel')!==-1) return 'admin';
+      return 'mgmt';
+    default: return 'tech';
+  }
+}
+function warrantyNameFor(sess, role){
+  // techs / managers / advisors are keyed by first name in this app.
+  if(role==='mgmt'||role==='admin'||role==='finance') return sess.name||'User';
+  return (sess.name||'').split(/\s+/)[0]||sess.name||'User';
+}
+function bootstrapUnifiedLogin(){
+  if(!window.HPE_AUTH){ return; }                 // shared auth not loaded — fall back to local login
+  var sess=HPE_AUTH.getSession();
+  if(!sess){ window.location.href='../index.html'; return; }  // must sign in on the platform first
+  CR=mapWarrantyRole(sess);
+  if(CR==='mgmt'){ var mg=document.getElementById('rc-mg'); if(mg)mg.style.display=''; }
+  var name=warrantyNameFor(sess, CR);
+  // Drive the existing login pipeline with the resolved name/role.
+  Promise.resolve(doDirectLogin(name)).then(function(){
+    if(CU && !CU.loc && sess.store){ CU.loc = sess.store==='south'?'HYD010':'HYD020'; }
+  }).catch(function(e){ console.warn('Unified login bridge failed:',e); });
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bootstrapUnifiedLogin);
+else bootstrapUnifiedLogin();
 
 </script>
 </body>
