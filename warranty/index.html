@@ -4975,6 +4975,17 @@ function bootstrapUnifiedLogin(){
     if(CU && !CU.loc && sess.store){ CU.loc = sess.store==='south'?'HYD010':'HYD020'; }
   }).catch(function(e){ console.warn('Unified login bridge failed:',e); });
 }
+// Anti-black-screen safety net: if ANYTHING throws, dismiss the loading
+// overlay and reveal the app (when signed in) instead of a dark screen.
+function _antiBlackScreen(){
+  try{ var ov=document.getElementById('csv-loading'); if(ov) ov.style.display='none'; }catch(e){}
+  try{ var po=document.getElementById('pin-overlay'); if(po) po.style.display='none'; }catch(e){}
+  try{ if(window.CU){ var lo=document.getElementById('lo'); var app=document.getElementById('app');
+        if(lo) lo.style.display='none'; if(app) app.style.display='grid'; } }catch(e){}
+}
+window.addEventListener('error',_antiBlackScreen);
+window.addEventListener('unhandledrejection',_antiBlackScreen);
+
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bootstrapUnifiedLogin);
 else bootstrapUnifiedLogin();
 
