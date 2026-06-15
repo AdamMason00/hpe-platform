@@ -1121,6 +1121,11 @@ async function doDirectLogin(forcedName){
   var loadDiv=document.getElementById('csv-loading');
   var progBar=document.getElementById('csv-progress');
   var loadMsg=document.getElementById('csv-load-msg');
+  // Guard: complete login exactly once and never leave the loading overlay
+  // (a dark full-screen) stuck — that would read as a "black screen".
+  var _finished=false;
+  function _finishLogin(){ if(_finished)return; _finished=true; try{loadDiv.style.display='none';}catch(e){} completeLogin(name); }
+  var _watchdog=setTimeout(function(){ console.warn('Login watchdog fired — data load slow, continuing.'); _finishLogin(); },16000);
   loadDiv.style.display='flex';
   progBar.style.background='var(--or)';
   loadMsg.textContent='Loading work orders from Drive...';
@@ -1183,8 +1188,8 @@ async function doDirectLogin(forcedName){
       apiPost('saveWOs',{wos:woBatch}).then(function(r){if(r)console.log('WOs synced:',r);});
     }
   }catch(e){console.warn('API load:',e);}
-  loadDiv.style.display='none';
-  completeLogin(name);
+  clearTimeout(_watchdog);
+  _finishLogin();
 }
 function completeLoginDirect(name){
   document.getElementById('csv-loading').style.display='none';
@@ -1295,20 +1300,24 @@ var _apiOK=false; // true once first ping succeeds
 
 async function api(action,params,method){
   params=params||{};params.action=action;
+  var ctrl=(typeof AbortController!=='undefined')?new AbortController():null;
+  var to=ctrl?setTimeout(function(){try{ctrl.abort();}catch(e){}},20000):null;
   try{
     var resp;
     if(method==='GET'){
       var qs=Object.keys(params).map(function(k){return encodeURIComponent(k)+'='+encodeURIComponent(typeof params[k]==='object'?JSON.stringify(params[k]):params[k]);}).join('&');
-      resp=await fetch(API_URL+'?'+qs);
+      resp=await fetch(API_URL+'?'+qs,ctrl?{signal:ctrl.signal}:{});
     }else{
-      resp=await fetch(API_URL,{method:'POST',body:JSON.stringify(params),headers:{'Content-Type':'text/plain'}});
+      resp=await fetch(API_URL,{method:'POST',body:JSON.stringify(params),headers:{'Content-Type':'text/plain'},signal:ctrl?ctrl.signal:undefined});
     }
+    if(to){clearTimeout(to);to=null;}
     if(!resp.ok)throw new Error('HTTP '+resp.status);
     var r=await resp.json();
     if(!r.success)throw new Error(r.error||'API error');
     _apiOK=true;
     return r.data;
   }catch(e){
+    if(to){clearTimeout(to);}
     console.warn('API ['+action+']:',e.message);
     return null;
   }
