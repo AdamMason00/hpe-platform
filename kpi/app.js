@@ -623,11 +623,7 @@ RENDER.staff = function(sec){
       b.addEventListener('click', function(){ showWageHistory(b.getAttribute('data-hist')); }); });
     $('#saveRoster', sec).addEventListener('click', saveStaff);
     $('#savePins', sec).addEventListener('click', savePINs);
-    $('#addStaff', sec).addEventListener('click', function(){
-      STATE.staff.push({ name: 'New Employee', store: 'south', division: 'S', roleType: 'tech',
-        fte: 1, pin: '', queue: '', payRate: 0, payType: 'Hourly', vacationWeeks: 0, payHistory: [], active: true });
-      saveStaff().then(function(){ go('staff'); });
-    });
+    $('#addStaff', sec).addEventListener('click', function(){ showAddStaff(); });
   }
 };
 
@@ -682,6 +678,57 @@ function showEditStaff(name){
       s.effName = $('#eEffName',box).value.trim();
       rebuildEfficiencyIndex();   // re-link efficiency with the new empNum / override
       saveStaff().then(function(){ closeModal(); go('staff'); });
+    });
+  });
+}
+
+/* ---- Add a new employee ---- */
+function showAddStaff(){
+  modal('Add Employee',
+    '<div class="form-grid">' +
+      '<label class="fld" style="grid-column:1 / -1"><span>Full name *</span><input type="text" id="aName" placeholder="e.g. Jane Smith" autofocus></label>' +
+      '<label class="fld"><span>Store</span><select id="aStore"><option value="south">South Store</option><option value="north">North Store</option></select></label>' +
+      '<label class="fld"><span>Role</span><select id="aRole">' +
+        ['tech','support','manager','admin'].map(function(r){ return '<option value="'+r+'">'+r+'</option>'; }).join('') + '</select></label>' +
+      '<label class="fld"><span>Pay type</span><select id="aPayType"><option value="Hourly">Hourly</option><option value="Salary">Salary</option></select></label>' +
+      '<label class="fld"><span id="aRateLbl">Hourly rate $</span><input type="number" step="0.01" id="aRate" value="0"></label>' +
+      '<label class="fld"><span>FTE</span><input type="number" step="0.1" id="aFte" value="1"></label>' +
+      '<label class="fld"><span>Vacation (weeks)</span><input type="number" step="0.5" id="aVac" value="0"></label>' +
+      '<label class="fld"><span>Employee # (tech/support login)</span><input type="text" id="aEmpNum" placeholder="e.g. S043"></label>' +
+      '<label class="fld"><span>Email (manager/admin login)</span><input type="email" id="aEmail" placeholder="name@hydeparkequipment.ca"></label>' +
+      '<label class="fld"><span>PIN / passcode (4 digits)</span><input type="text" maxlength="4" inputmode="numeric" id="aPin" placeholder="––––"></label>' +
+    '</div>' +
+    '<div id="aAnnual" class="stat ok" style="margin:4px 0 14px"></div>' +
+    '<div class="msg" id="aMsg" style="display:none"></div>' +
+    '<div style="text-align:right"><button class="btn btn-primary" id="aSave">Add employee</button></div>',
+  function(box){
+    function preview(){
+      var tmp = { payRate: num($('#aRate',box).value), payType: $('#aPayType',box).value, fte: num($('#aFte',box).value) };
+      $('#aRateLbl',box).textContent = tmp.payType === 'Salary' ? 'Annual salary $' : 'Hourly rate $';
+      $('#aAnnual',box).innerHTML = '<div class="label">Approx. annual income</div><div class="value" style="font-size:24px">' +
+        money(annualIncome(tmp)) + '</div>';
+    }
+    ['aRate','aPayType','aFte'].forEach(function(id){ $('#'+id,box).addEventListener('input', preview); });
+    preview();
+    $('#aSave',box).addEventListener('click', function(){
+      var name = $('#aName',box).value.trim();
+      var msg = $('#aMsg',box);
+      if (!name){ msg.style.display='block'; msg.className='msg err'; msg.textContent='Enter a name.'; return; }
+      if (staffRec(name)){ msg.style.display='block'; msg.className='msg err'; msg.textContent='An employee named “'+name+'” already exists.'; return; }
+      var store = $('#aStore',box).value;
+      var rec = {
+        name: name, store: store, division: storeDivision(store),
+        roleType: $('#aRole',box).value, fte: num($('#aFte',box).value),
+        pin: $('#aPin',box).value.replace(/\D/g,'').slice(0,4),
+        empNum: $('#aEmpNum',box).value.trim(), email: $('#aEmail',box).value.trim(), effName: '',
+        payRate: num($('#aRate',box).value), payType: $('#aPayType',box).value,
+        vacationWeeks: num($('#aVac',box).value), payHistory: [], active: true, queue: ''
+      };
+      STATE.staff.push(rec);
+      rebuildEfficiencyIndex();
+      closeModal();
+      go('staff');          // render the new row immediately
+      saveStaff();          // persist in the background (toasts result)
     });
   });
 }
