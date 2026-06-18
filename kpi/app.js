@@ -1075,7 +1075,9 @@ RENDER['manager-bonuses'] = function(sec){
     var y = managerYtd(email);
     var nm = CFG.MANAGER_BONUS[email].name;
     html += '<div class="card"><div class="section-title"><h3>' + esc(nm) + ' · ' + storeName(b.store) + '</h3>' +
-      '<div class="flex gap"><button class="btn btn-ghost btn-sm" data-pdf="' + email + '">Export PDF</button>' +
+      '<div class="flex gap center">' +
+      (AUTH.isAdmin(SESSION) ? '<label class="muted" style="font-size:12px;display:flex;align-items:center;gap:6px">Annual cap $<input type="number" step="100" data-cap="' + email + '" value="' + ((STATE.kpi.managerBonus[email] && STATE.kpi.managerBonus[email].annualCap) || 0) + '" style="width:96px"></label>' : '') +
+      '<button class="btn btn-ghost btn-sm" data-pdf="' + email + '">Export PDF</button>' +
       '<button class="btn ' + (b.paid?'btn-ghost':'btn-primary') + ' btn-sm" data-paid="' + email + '">' + (b.paid ? '✓ Paid' : 'Mark paid') + '</button></div></div>';
 
     // formula breakdown cards
@@ -1114,6 +1116,14 @@ RENDER['manager-bonuses'] = function(sec){
   });
   sec.querySelectorAll('button[data-pdf]').forEach(function(btn){
     btn.addEventListener('click', function(){ exportManagerPDF(btn.getAttribute('data-pdf')); });
+  });
+  sec.querySelectorAll('input[data-cap]').forEach(function(inp){
+    inp.addEventListener('change', function(){
+      var email = inp.getAttribute('data-cap');
+      STATE.kpi.managerBonus[email] = STATE.kpi.managerBonus[email] || { paid: {} };
+      STATE.kpi.managerBonus[email].annualCap = num(inp.value);
+      saveKPI().then(function(){ go('manager-bonuses'); });
+    });
   });
 };
 
