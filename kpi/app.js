@@ -30,7 +30,7 @@ var STATE = {
     quarters: {},          // key -> { south:{...metrics}, north:{...metrics} }
     managerBonus: {},      // email -> { annualCap, paid:{periodKey:true} }
     payments: [],          // [{date, employee, period, amount, note}]
-    growth: { rate: CFG.KPI_CONFIG.growthRate, bank: { south: 0, north: 0 }, paidOut: 0, history: [], allocation: {} },
+    growth: { rate: CFG.KPI_CONFIG.growthRate, threshold: 4, bank: { south: 0, north: 0 }, paidOut: 0, history: [], allocation: {} },
     effExclusions: {},     // non-billable entry key -> { excluded:bool, note:'' }
     manualBonuses: {},     // period -> { employeeName -> { amount, note } }
     warrantyAdmin: { bonusAmount: CFG.KPI_CONFIG.warrantyAnnual || 5000, exclusions: {}, paid: {} }
@@ -271,6 +271,39 @@ function techBonusPool(periodKey, store){
   techs.forEach(function(s){ lines.push({ name: s.name, group: 'Tech', fte: s.fte, amount: techPool * (s.fte / techFte) }); });
   support.forEach(function(s){ lines.push({ name: s.name, group: 'Support', fte: s.fte, amount: supportPool * (s.fte / supFte) }); });
   return { eligible: eligible, points: score.points, pool: pool, techPool: techPool, supportPool: supportPool, lines: lines };
+}
+
+/* ---- Growth bonus accrual (per store, per quarter) ----
+ * If combined parts+service income grows >= threshold% vs the prior-year same
+ * quarter, accrue rate% (30%) of that store's tech+support pool to its bank. */
+function growthFromData(store, m){
+  m = m || {};
+  var curParts = num(m.curParts), curSvc = num(m.curSvc), priorParts = num(m.priorParts), priorSvc = num(m.priorSvc);
+  var curTotal = curParts + curSvc, priorTotal = priorParts + priorSvc;
+  var pctOf = function(cur, prior){ return prior > 0 ? (cur - prior) / prior * 100 : null; };
+  var rate = num(STATE.kpi.growth.rate) || 30;
+  var threshold = (STATE.kpi.growth.threshold != null) ? num(STATE.kpi.growth.threshold) : 4;
+  var combG = pctOf(curTotal, priorTotal);
+  var gate = combG != null && combG >= threshold;
+  return {
+    curParts: curParts, curSvc: curSvc, priorParts: priorParts, priorSvc: priorSvc,
+    curTotal: curTotal, priorTotal: priorTotal,
+    partsG: pctOf(curParts, priorParts), svcG: pctOf(curSvc, priorSvc), combG: combG,
+    gate: gate, rate: rate, threshold: threshold
+  };
+}
+function storeGrowth(periodKey, store){
+  var g = growthFromData(store, metricsFor(periodKey, store) || {});
+  g.pool = techBonusPool(periodKey, store).pool;
+  g.accrual = g.gate ? (g.rate / 100) * g.pool : 0;
+  return g;
+}
+function storeBank(store){
+  var t = 0; periodsInYear(2026).forEach(function(p){ t += storeGrowth(p.key, store).accrual; });
+  return t;
+}
+function combinedGrowthPool(){
+  return storeBank('south') + storeBank('north');
 }
 
 /* ============================ 6. NAV / ROUTING ============================ */
@@ -526,7 +559,10 @@ RENDER.quarterly = function(sec){
   var stores = managerStores();
   var fields = [
     ['hrs', 'Hours Reported'], ['billed', 'Hours Billed'], ['comeback', 'Comeback %'],
-    ['svcGm', 'Service GM %'], ['partsGm', 'Parts GM %'], ['svcRev', 'Service Revenue $'], ['endingWip', 'Ending WIP $']
+    ['svcGm', 'Service GM %'], ['partsGm', 'Parts GM %'], ['svcRev', 'Service Revenue $'], ['endingWip', 'Ending WIP $'],
+    // growth income (parts + service, current vs prior-year same quarter)
+    ['curParts', 'Parts income — this qtr $'], ['curSvc', 'Service income — this qtr $'],
+    ['priorParts', 'Parts income — prior-yr qtr $'], ['priorSvc', 'Service income — prior-yr qtr $']
   ];
   var html = '<div class="card"><div class="section-title"><h3>Enter results — ' + periodLabel(pk) + '</h3>' +
     '<button class="btn btn-primary btn-sm" id="qSave">Save quarter</button></div>';
@@ -551,9 +587,16 @@ RENDER.quarterly = function(sec){
     return o;
   }
   function refreshPrev(st){
-    var s = scoreKPIs(readStore(st));
+    var data = readStore(st);
+    var s = scoreKPIs(data);
+    var g = growthFromData(st, data);
+    g.accrual = g.gate ? (g.rate / 100) * (s.points >= 2 ? STATE.kpi.config.cap : 0) : 0;
+    var gateTxt = g.combG == null ? 'enter income' :
+      (g.gate ? '<span class="cell-ok">PASS ' + g.combG.toFixed(1) + '%</span>' : '<span class="cell-bad">' + g.combG.toFixed(1) + '% (need ' + g.threshold + '%)</span>');
     $('#prev-' + st, sec).innerHTML = '<div class="spacer"></div>' + kpiChips(s) +
-      '<div style="margin-top:8px" class="muted">Score: <b>' + s.points + '/4</b> · Eff ' + pct(s.eff) + ' · WIP ' + pct(s.wipPct) + '</div>';
+      '<div style="margin-top:8px" class="muted">Score: <b>' + s.points + '/4</b> · Eff ' + pct(s.eff) + ' · WIP ' + pct(s.wipPct) + '</div>' +
+      '<div style="margin-top:6px" class="muted">Growth: Parts ' + (g.partsG==null?'—':g.partsG.toFixed(1)+'%') + ' · Service ' + (g.svcG==null?'—':g.svcG.toFixed(1)+'%') +
+      ' · Combined ' + gateTxt + (g.gate ? ' → accrue ' + money(g.accrual) : '') + '</div>';
   }
   stores.forEach(refreshPrev);
   sec.querySelectorAll('input').forEach(function(inp){
@@ -1066,29 +1109,90 @@ RENDER.payments = function(sec){
 /* ---- Growth Bonus ---- */
 RENDER.growth = function(sec){
   var g = STATE.kpi.growth;
-  var html = '<div class="card"><div class="section-title"><h3>Growth Bonus Bank</h3>' +
-    '<button class="btn btn-primary btn-sm" id="gSave">Save</button></div>' +
-    '<div class="desc">Growth accrues to a bank at ' + g.rate + '% and pays out at year-end, separate from quarterly KPI bonuses.</div>' +
-    '<div class="form-grid">' +
-      '<label class="fld"><span>Accrual rate %</span><input type="number" id="gRate" value="' + g.rate + '"></label>' +
-      '<label class="fld"><span>Total paid out $</span><input type="number" id="gPaid" value="' + g.paidOut + '"></label>' +
-      '<label class="fld"><span>South bank $</span><input type="number" id="gSouth" value="' + g.bank.south + '"></label>' +
-      '<label class="fld"><span>North bank $</span><input type="number" id="gNorth" value="' + g.bank.north + '"></label>' +
-    '</div></div><div class="spacer"></div>';
-  var total = num(g.bank.south) + num(g.bank.north);
-  html += '<div class="grid g3">' +
-    stat('South bank', money(g.bank.south), 'accrued', 'blue') +
-    stat('North bank', money(g.bank.north), 'accrued', 'blue') +
-    stat('Combined bank', money(total), 'less ' + money(g.paidOut) + ' paid', 'ok') + '</div>';
-  html += '<div class="spacer"></div><div class="card"><h3>Year-end payout</h3>' +
-    progress('Remaining ' + money(Math.max(0, total - g.paidOut)), 'Bank ' + money(total), total ? (g.paidOut/total*100) : 0) + '</div>';
-  sec.innerHTML = html;
-  $('#gSave', sec).addEventListener('click', function(){
-    g.rate = num($('#gRate',sec).value); g.paidOut = num($('#gPaid',sec).value);
-    g.bank.south = num($('#gSouth',sec).value); g.bank.north = num($('#gNorth',sec).value);
-    saveKPI();
+  var admin = AUTH.isAdmin(SESSION);
+  var viewStores = managerStores();
+  var html = '';
+
+  // ---- settings (admin) ----
+  if (admin) {
+    html += '<div class="card"><div class="section-title"><h3>Growth Bonus — Settings</h3>' +
+      '<button class="btn btn-primary btn-sm" id="gSave">Save settings</button></div>' +
+      '<div class="desc">Each store accrues ' + g.rate + '% of its tech+support bonus pool to a growth bank in any quarter its combined parts+service income grows ≥ ' + (g.threshold!=null?g.threshold:4) + '% vs the prior-year same quarter. Banks combine into one year-end pool.</div>' +
+      '<div class="form-grid">' +
+        '<label class="fld"><span>Accrual rate %</span><input type="number" id="gRate" value="' + g.rate + '"></label>' +
+        '<label class="fld"><span>Growth threshold %</span><input type="number" id="gThresh" value="' + (g.threshold!=null?g.threshold:4) + '"></label>' +
+      '</div></div><div class="spacer"></div>';
+  }
+
+  // ---- per-store accrual breakdown ----
+  viewStores.forEach(function(st){
+    var bank = storeBank(st);
+    html += '<div class="card"><div class="section-title"><h3>' + storeName(st) + ' — Growth Bank</h3>' +
+      '<span class="pill ' + (bank>0?'ok':'muted') + '">' + money(bank) + ' accrued</span></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Quarter</th><th class="num">Parts growth</th><th class="num">Service growth</th><th class="num">Combined</th><th>Gate (' + (g.threshold!=null?g.threshold:4) + '%)</th><th class="num">Tech+Support pool</th><th class="num">Accrual ' + g.rate + '%</th></tr></thead><tbody>';
+    periodsInYear(2026).forEach(function(p){
+      var sg = storeGrowth(p.key, st);
+      var fmt = function(x){ return x==null?'<span class="muted">—</span>':'<span class="' + (x>=0?'cell-ok':'cell-bad') + '">' + x.toFixed(1) + '%</span>'; };
+      html += '<tr><td><b>Q' + p.q + '</b></td><td class="num">' + fmt(sg.partsG) + '</td><td class="num">' + fmt(sg.svcG) + '</td><td class="num">' + fmt(sg.combG) + '</td>' +
+        '<td>' + (sg.combG==null?'<span class="muted">—</span>':(sg.gate?'<span class="pill ok">PASS</span>':'<span class="pill bad">miss</span>')) + '</td>' +
+        '<td class="num">' + money(sg.pool) + '</td><td class="num"><b>' + money(sg.accrual) + '</b></td></tr>';
+    });
+    html += '<tr style="border-top:2px solid #1c1c1c"><td colspan="6"><b>Store growth bank (year)</b></td><td class="num"><b>' + money(bank) + '</b></td></tr>';
+    html += '</tbody></table></div><div class="muted" style="margin-top:8px">Enter the parts/service income on <b>Quarterly Results</b> to drive these numbers.</div></div><div class="spacer"></div>';
   });
+
+  // ---- year-end combined pool + allocation (admin only) ----
+  if (admin) html += renderYearEndPool();
+  sec.innerHTML = html;
+
+  if (admin) {
+    var gs = $('#gSave', sec);
+    if (gs) gs.addEventListener('click', function(){ g.rate = num($('#gRate',sec).value); g.threshold = num($('#gThresh',sec).value); saveKPI().then(function(){ go('growth'); }); });
+    wireYearEndPool(sec);
+  }
 };
+
+/* ---- Year-end combined pool, split by manual ratio across all staff ---- */
+function renderYearEndPool(){
+  var g = STATE.kpi.growth;
+  var pool = combinedGrowthPool();
+  var remaining = Math.max(0, pool - num(g.paidOut));
+  // eligible = active techs + support + warranty admin (company-wide)
+  var elig = STATE.staff.filter(function(s){ return s.active !== false && ['tech','support','admin'].indexOf(s.roleType) !== -1; });
+  // sort: techs, support, admin
+  var order = { tech:0, support:1, admin:2 };
+  elig.sort(function(a,b){ return (order[a.roleType]-order[b.roleType]) || a.name.localeCompare(b.name); });
+  var alloc = g.allocation || {};
+  var totalRatio = elig.reduce(function(a,s){ return a + num(alloc[s.name]); }, 0);
+  var html = '<div class="card"><div class="section-title"><h3>Year-End Growth Pool — Allocation</h3>' +
+    '<button class="btn btn-primary btn-sm" id="yeSave">Save allocation</button></div>' +
+    '<div class="grid g3" style="margin-bottom:12px">' +
+      stat('Combined pool', money(pool), 'South + North banks', 'ok') +
+      stat('Paid out', money(g.paidOut), '', '') +
+      stat('Remaining', money(remaining), '', 'blue') + '</div>' +
+    '<label class="fld" style="max-width:240px"><span>Total paid out $</span><input type="number" id="yePaid" value="' + num(g.paidOut) + '"></label>' +
+    '<div class="muted" style="margin:6px 0 10px">Enter a ratio (or %) per person — Jared can be weighted higher than Ed. Each share = pool × (their ratio ÷ total ratio). Total ratio: <b>' + totalRatio + '</b></div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Store</th><th>Role</th><th class="num">Ratio / %</th><th class="num">Share $</th></tr></thead><tbody>';
+  elig.forEach(function(s){
+    var ratio = num(alloc[s.name]);
+    var share = totalRatio > 0 ? pool * (ratio / totalRatio) : 0;
+    html += '<tr><td><b>' + esc(s.name) + '</b></td><td>' + storeName(s.store) + '</td><td><span class="pill muted">' + esc(s.roleType) + '</span></td>' +
+      '<td class="num"><input type="number" step="0.1" min="0" data-ye="' + esc(s.name) + '" value="' + (ratio || '') + '" placeholder="0" style="width:84px;text-align:right"></td>' +
+      '<td class="num"><b>' + money2(share) + '</b></td></tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+function wireYearEndPool(sec){
+  var g = STATE.kpi.growth;
+  var pd = $('#yePaid', sec);
+  if (pd) pd.addEventListener('change', function(){ g.paidOut = num(pd.value); });
+  sec.querySelectorAll('input[data-ye]').forEach(function(inp){
+    inp.addEventListener('change', function(){ g.allocation = g.allocation || {}; g.allocation[inp.getAttribute('data-ye')] = num(inp.value); if (CURRENT_PAGE) go('growth'); });
+  });
+  var sv = $('#yeSave', sec);
+  if (sv) sv.addEventListener('click', function(){ if (pd) g.paidOut = num(pd.value); saveKPI().then(function(){ go('growth'); }); });
+}
 
 /* ---- Manager Bonuses ---- */
 RENDER['manager-bonuses'] = function(sec){
