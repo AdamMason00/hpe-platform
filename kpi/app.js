@@ -326,6 +326,7 @@ var NAV = [
   ]},
   { group: 'Tools', items: [
     { id: 'scenario',   label: 'Scenario Testing',     ic: '🧪', roles: ['admin','manager'] },
+    { id: 'warranty-kpi', label: 'Warranty Admin KPI', ic: '🛠️', roles: ['admin'] },
     { id: 'config',     label: 'Configuration',        ic: '⚒', roles: ['admin'] }
   ]},
   { group: 'My Dashboard', items: [
@@ -371,6 +372,7 @@ var PAGE_META = {
   growth:     ['Growth Bonus', 'Growth bank & year-end payout'],
   'manager-bonuses': ['Manager Bonuses', 'Steve & Bill KPI bonus'],
   scenario:   ['Scenario Testing', 'What-if calculator'],
+  'warranty-kpi': ['Warranty Admin KPI', 'Close warranty WOs within 14 days of last punch'],
   config:     ['Configuration', 'Thresholds, uploads & staff config'],
   store:      ['Store Dashboard', 'Your store KPIs, efficiency & open WOs'],
   tech:       ['My Efficiency', 'Your monthly results & flagged WOs'],
@@ -1286,6 +1288,116 @@ RENDER.scenario = function(sec){
 };
 function field(id,label,val){ return '<label class="fld"><span>' + esc(label) + '</span><input type="number" step="any" id="' + id + '" value="' + val + '"></label>'; }
 
+/* ============================ WARRANTY ADMIN KPI ============================
+ * From the Warranty Work Orders upload. Per quarter (by close date): % of
+ * warranty WOs closed within 14 days of last tech punch -> graduated rating.
+ * Individual WOs outside the admin's control can be excluded. */
+function warrantyKpiForQuarter(periodKey){
+  var wa = STATE.kpi.warrantyAdmin || {};
+  var excl = wa.exclusions || {};
+  var all = (STATE.warrantyWO.rows || []).filter(function(w){ return w.quarter === periodKey; });
+  var counted = all.filter(function(w){ return !(excl[w.doc] && excl[w.doc].excluded); });
+  var total = counted.length;
+  var within14 = counted.filter(function(w){ return w.lastPunchDays <= 14; }).length;
+  var pctv = total > 0 ? within14 / total * 100 : null;
+  var rating = pctv == null ? 0 : pctv >= 90 ? 100 : pctv >= 75 ? 70 : pctv >= 50 ? 40 : 15;
+  var bonusAmt = num(wa.bonusAmount) || 5000;
+  var quarterlyMax = bonusAmt / 4;
+  var payout = quarterlyMax * rating / 100;
+  var over30 = counted.filter(function(w){ return w.lastPunchDays > 30; });
+  var sales = counted.reduce(function(a,w){ return a + num(w.total); }, 0);
+  var internal = counted.reduce(function(a,w){ return w.internal ? a + num(w.total) : a; }, 0);
+  return {
+    all: all, counted: counted, total: total, within14: within14, pct: pctv, rating: rating,
+    bonusAmt: bonusAmt, quarterlyMax: quarterlyMax, payout: payout,
+    over30: over30, internalPct: sales > 0 ? internal / sales * 100 : 0, sales: sales, internal: internal,
+    met: pctv != null && pctv >= 90
+  };
+}
+function warrantyKpiAnnual(){
+  var quarters = periodsInYear(2026).map(function(p){ return warrantyKpiForQuarter(p.key); });
+  var base = quarters.reduce(function(a,q){ return a + q.payout; }, 0);
+  var metCount = quarters.filter(function(q){ return q.met; }).length;
+  var multiplier = metCount >= 3 ? 1.04 : 1;           // 4% growth multiplier if >=3/4 met
+  return { quarters: quarters, base: base, metCount: metCount, multiplier: multiplier, total: base * multiplier };
+}
+
+RENDER['warranty-kpi'] = function(sec){
+  var wa = STATE.kpi.warrantyAdmin || (STATE.kpi.warrantyAdmin = { bonusAmount: 5000, exclusions: {}, paid: {} });
+  var admin = AUTH.isAdmin(SESSION);
+  var ann = warrantyKpiAnnual();
+  var nWO = (STATE.warrantyWO.rows || []).length;
+
+  var html = '<div class="card"><div class="section-title"><h3>Warranty Admin KPI — FY2026</h3>' +
+    (admin ? '<button class="btn btn-primary btn-sm" id="waSave">Save</button>' : '') + '</div>' +
+    '<div class="desc">A warranty WO is closed the day the claim is submitted; performance = days from the last tech punch to close. Target: ≥ 90% closed within 14 days. ' + nWO + ' warranty WOs loaded.</div>' +
+    '<div class="form-grid">' +
+      '<label class="fld"><span>Annual bonus amount $</span><input type="number" id="waBonus" value="' + (num(wa.bonusAmount)||5000) + '"' + (admin?'':' disabled') + '></label>' +
+    '</div></div><div class="spacer"></div>';
+
+  if (!nWO) html += '<div class="empty">No warranty work orders uploaded yet. Upload them on the <b>Configuration</b> page (Warranty Work Orders).</div>';
+  else {
+    // top stats
+    html += '<div class="grid g4">' +
+      stat('Annual payout', money(ann.total), ann.multiplier > 1 ? '×1.04 growth applied' : 'base', 'ok') +
+      stat('Quarters met', ann.metCount + ' / 4', '≥90% target', ann.metCount>=3?'ok':'bad') +
+      stat('Growth multiplier', ann.multiplier > 1 ? '+4%' : 'none', '≥3/4 quarters', ann.multiplier>1?'ok':'') +
+      stat('Bonus amount', money(num(wa.bonusAmount)||5000), money(((num(wa.bonusAmount)||5000)/4)) + '/qtr max', '') + '</div><div class="spacer"></div>';
+
+    // per-quarter breakdown
+    html += '<div class="card"><div class="section-title"><h3>Quarterly Performance</h3></div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Quarter</th><th class="num">Warranty WOs</th><th class="num">≤14 days</th><th class="num">% within 14d</th><th class="num">Rating</th><th class="num">Payout</th><th>Guardrails</th><th>' + (admin?'Status':'') + '</th></tr></thead><tbody>';
+    periodsInYear(2026).forEach(function(p){
+      var q = warrantyKpiForQuarter(p.key);
+      var guard = [];
+      if (q.over30.length) guard.push('<span class="pill bad">' + q.over30.length + ' over 30d</span>');
+      if (q.internalPct > 10) guard.push('<span class="pill warn">int ' + q.internalPct.toFixed(0) + '%</span>');
+      if (!guard.length && q.total) guard.push('<span class="pill ok">ok</span>');
+      var paid = wa.paid && wa.paid[p.key];
+      html += '<tr><td><b>Q' + p.q + '</b></td><td class="num">' + q.total + '</td><td class="num">' + q.within14 + '</td>' +
+        '<td class="num">' + (q.pct==null?'—':'<span class="' + (q.pct>=90?'cell-ok':'cell-bad') + '">' + q.pct.toFixed(0) + '%</span>') + '</td>' +
+        '<td class="num"><b>' + q.rating + '%</b></td><td class="num">' + money(q.payout) + '</td><td>' + guard.join(' ') + '</td>' +
+        '<td>' + (q.total ? (admin ? '<button class="btn ' + (paid?'btn-ghost':'btn-primary') + ' btn-sm" data-wapaid="' + p.key + '">' + (paid?'✓ Paid':'Mark paid') + '</button>' : (paid?'Paid':'')) : '') + '</td></tr>';
+    });
+    html += '<tr style="border-top:2px solid #1c1c1c"><td colspan="5"><b>Annual (×' + ann.multiplier + ')</b></td><td class="num"><b>' + money(ann.total) + '</b></td><td colspan="2"></td></tr>';
+    html += '</tbody></table></div><div class="muted" style="margin-top:8px">Rating: ≥90% → 100% · 75–89% → 70% · 50–74% → 40% · &lt;50% → 15%. Hard control: no WO open >30 days. Internal warranty should stay ≤10% of warranty sales.</div></div>';
+
+    // exclusions: WOs that missed the 14-day target this period
+    var pk = CURRENT_PERIOD;
+    var misses = (STATE.warrantyWO.rows || []).filter(function(w){ return w.quarter === pk && w.lastPunchDays > 14; });
+    html += '<div class="spacer"></div><div class="card"><div class="section-title"><h3>Exceptions — ' + periodLabel(pk) + ' (missed 14-day)</h3>' +
+      (admin ? '<button class="btn btn-primary btn-sm" id="waExSave">Save exclusions</button>' : '') + '</div>' +
+      '<div class="muted" style="margin-bottom:10px">Exclude WOs that exceeded 14 days for reasons outside the admin’s control (parts backorder, manufacturer delay, etc.) — they’re removed from this quarter’s calculation.</div>';
+    if (!misses.length) html += '<div class="empty">No warranty WOs missed the 14-day target this quarter. 👍</div>';
+    else {
+      var excl = wa.exclusions || {};
+      misses.sort(function(a,b){ return b.lastPunchDays - a.lastPunchDays; });
+      html += '<div class="table-wrap"><table><thead><tr><th>WO#</th><th>Store</th><th>Closed</th><th class="num">Days to close</th><th class="num">Amount</th>' + (admin?'<th>Exclude</th><th>Note</th>':'') + '</tr></thead><tbody>';
+      misses.forEach(function(w){
+        var ex = excl[w.doc] || { excluded: false, note: '' };
+        html += '<tr' + (ex.excluded?' class="bg-bad"':'') + '><td class="mono">' + esc(w.doc) + '</td><td>' + (w.division==='S'?'South':'North') + '</td><td>' + esc(w.closed) + '</td>' +
+          '<td class="num">' + (w.lastPunchDays>30?'<span class="cell-bad">':'') + w.lastPunchDays + (w.lastPunchDays>30?'</span>':'') + '</td><td class="num">' + money(w.total) + '</td>' +
+          (admin ? '<td style="text-align:center"><input type="checkbox" data-waex="' + esc(w.doc) + '"' + (ex.excluded?' checked':'') + '></td><td><input type="text" data-waexnote="' + esc(w.doc) + '" value="' + esc(ex.note) + '" placeholder="reason…" style="min-width:150px"></td>' : '') + '</tr>';
+      });
+      html += '</tbody></table></div>';
+    }
+    html += '</div>';
+  }
+  sec.innerHTML = html;
+
+  if (admin) {
+    var wb = $('#waBonus', sec); if (wb) wb.addEventListener('change', function(){ wa.bonusAmount = num(wb.value); });
+    var ws = $('#waSave', sec); if (ws) ws.addEventListener('click', function(){ wa.bonusAmount = num($('#waBonus',sec).value); saveKPI().then(function(){ go('warranty-kpi'); }); });
+    sec.querySelectorAll('button[data-wapaid]').forEach(function(btn){
+      btn.addEventListener('click', function(){ var k = btn.getAttribute('data-wapaid'); wa.paid = wa.paid || {}; wa.paid[k] = !wa.paid[k]; saveKPI().then(function(){ go('warranty-kpi'); }); });
+    });
+    function waExRec(d){ wa.exclusions = wa.exclusions || {}; wa.exclusions[d] = wa.exclusions[d] || { excluded:false, note:'' }; return wa.exclusions[d]; }
+    sec.querySelectorAll('input[data-waex]').forEach(function(cb){ cb.addEventListener('change', function(){ waExRec(cb.getAttribute('data-waex')).excluded = cb.checked; }); });
+    sec.querySelectorAll('input[data-waexnote]').forEach(function(t){ t.addEventListener('change', function(){ waExRec(t.getAttribute('data-waexnote')).note = t.value; }); });
+    var wx = $('#waExSave', sec); if (wx) wx.addEventListener('click', function(){ saveKPI().then(function(){ go('warranty-kpi'); }); });
+  }
+};
+
 /* ============================ 8. ROLE DASHBOARDS ============================ */
 RENDER.store = function(sec){
   var st = SESSION.store; if (!st) { sec.innerHTML = '<div class="empty">No store assigned.</div>'; return; }
@@ -1782,7 +1894,9 @@ function handleWarrantyFile(wb){
       lastPunchDays: num(pick(r, ['WIP Last Punch Days to Close (Closed - Last Punch)','WIP Last Punch Days to Close','Last Punch Days to Close'])),
       daysToClose: num(pick(r, ['Days to Close (Closed-Opened)','Days to Close'])),
       total: num(pick(r, ['Document Amount (Total)','Document Amount','Total'])),
-      internal: (!!intFlag) || warrCode.indexOf('05101') !== -1 || warrCode.indexOf('S05102') !== -1
+      // internal warranty = the internal warranty account codes (the A/S "Int flag"
+      // is an address/stock indicator, not an internal-vs-OEM signal)
+      internal: warrCode.indexOf('05101') !== -1 || warrCode.indexOf('S05102') !== -1, intFlag: intFlag
     });
   });
   STATE.warrantyWO = { rows: out, uploadedAt: todayStr() };
