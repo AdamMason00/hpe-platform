@@ -30,11 +30,18 @@ var STATE = {
     quarters: {},          // key -> { south:{...metrics}, north:{...metrics} }
     managerBonus: {},      // email -> { annualCap, paid:{periodKey:true} }
     payments: [],          // [{date, employee, period, amount, note}]
-    growth: { rate: CFG.KPI_CONFIG.growthRate, bank: { south: 0, north: 0 }, paidOut: 0, history: [] }
+    growth: { rate: CFG.KPI_CONFIG.growthRate, bank: { south: 0, north: 0 }, paidOut: 0, history: [], allocation: {} },
+    effExclusions: {},     // non-billable entry key -> { excluded:bool, note:'' }
+    manualBonuses: {},     // period -> { employeeName -> { amount, note } }
+    warrantyAdmin: { bonusAmount: CFG.KPI_CONFIG.warrantyAnnual || 5000, exclusions: {}, paid: {} }
   },
   staff: [],
-  efficiency: { rows: [], byTechMonth: {}, uploadedAt: null },
+  // efficiency is stored AGGREGATED (raw labour files have thousands of rows
+  // that won't fit a single Sheets cell): per-tech/month totals, a non-billable
+  // detail list (for review/exclude), and only the flagged WOs.
+  efficiency: { byTechMonth: {}, techDiv: {}, nonBillable: [], flagged: [], uploadedAt: null },
   pos: { rows: [], uploadedAt: null },
+  warrantyWO: { rows: [], uploadedAt: null },   // parsed warranty work orders (KPI source)
   warrantyUpload: { uploadedAt: null },
   exclusions: {}           // docNum -> { excluded:bool, note:'' }
 };
@@ -102,9 +109,10 @@ function loadAll(){
   var jobs = [
     API.loadKPI().then(function(r){ mergeKPI(r); }).catch(noop),
     API.loadStaff().then(function(r){ STATE.staff = normaliseStaff((r && (r.staff || r.data)) || []); }).catch(function(){ STATE.staff = normaliseStaff(CFG.DEFAULT_STAFF); }),
-    API.loadEfficiency().then(function(r){ if (r && (r.rows || r.data)) ingestEfficiency(r.rows || r.data, r.uploadedAt); }).catch(noop),
+    API.loadEfficiency().then(function(r){ ingestEfficiency(r, r && r.uploadedAt); }).catch(noop),
     API.loadPOS().then(function(r){ if (r && (r.rows || r.data)) ingestPOS(r.rows || r.data, r.uploadedAt); }).catch(noop),
-    API.loadExclusions().then(function(r){ STATE.exclusions = (r && (r.exclusions || r.data)) || {}; }).catch(noop)
+    API.loadExclusions().then(function(r){ STATE.exclusions = (r && (r.exclusions || r.data)) || {}; }).catch(noop),
+    API.loadWarranty().then(function(r){ var w = r && (r.warranty || r.data); if (w && w.wo) STATE.warrantyWO = { rows: w.wo, uploadedAt: w.uploadedAt || null }; }).catch(noop)
   ];
   return Promise.all(jobs).then(function(){
     if (!STATE.staff || !STATE.staff.length) STATE.staff = normaliseStaff(CFG.DEFAULT_STAFF);
@@ -118,11 +126,14 @@ function noop(){}
 function mergeKPI(r){
   var d = (r && (r.kpi || r.data)) || r;
   if (!d || typeof d !== 'object') return;
-  if (d.config)       STATE.kpi.config = Object.assign({}, CFG.KPI_CONFIG, d.config);
-  if (d.quarters)     STATE.kpi.quarters = d.quarters;
-  if (d.managerBonus) STATE.kpi.managerBonus = d.managerBonus;
-  if (d.payments)     STATE.kpi.payments = d.payments;
-  if (d.growth)       STATE.kpi.growth = Object.assign(STATE.kpi.growth, d.growth);
+  if (d.config)        STATE.kpi.config = Object.assign({}, CFG.KPI_CONFIG, d.config);
+  if (d.quarters)      STATE.kpi.quarters = d.quarters;
+  if (d.managerBonus)  STATE.kpi.managerBonus = d.managerBonus;
+  if (d.payments)      STATE.kpi.payments = d.payments;
+  if (d.growth)        STATE.kpi.growth = Object.assign(STATE.kpi.growth, d.growth);
+  if (d.effExclusions) STATE.kpi.effExclusions = d.effExclusions;
+  if (d.manualBonuses) STATE.kpi.manualBonuses = d.manualBonuses;
+  if (d.warrantyAdmin) STATE.kpi.warrantyAdmin = Object.assign(STATE.kpi.warrantyAdmin, d.warrantyAdmin);
 }
 function normaliseStaff(arr){
   return (arr || []).map(function(s){
@@ -847,11 +858,12 @@ RENDER.efficiency = function(sec){
   var c = STATE.kpi.config;
   var target = c.techEff;                 // define target BEFORE using it (fix #2)
   var stores = managerStores();
-  if (!STATE.efficiency.rows.length) {
+  if (!hasEfficiency()) {
     sec.innerHTML = '<div class="empty">No Labour efficiency data uploaded yet. Upload it on the <b>Configuration</b> page.</div>';
     return;
   }
   var months = effMonths();
+  var exMap = excludedNBMap();
   var html = '';
   stores.forEach(function(st){
     var div = storeDivision(st);
@@ -861,32 +873,74 @@ RENDER.efficiency = function(sec){
     if (!techs.length) { html += '<div class="empty">No tech rows for this store.</div></div>'; return; }
     html += '<div class="table-wrap"><table><thead><tr><th>Technician</th>';
     months.forEach(function(m){ html += '<th class="num">' + esc(m) + '</th>'; });
-    html += '<th class="num">Avg</th></tr></thead><tbody>';
+    html += '<th class="num">Avg</th><th class="num">Non-Bill hrs</th></tr></thead><tbody>';
     techs.forEach(function(name){
       html += '<tr><td><b>' + esc(name) + '</b></td>';
-      var sumB = 0, sumR = 0;
+      var sumB = 0, sumR = 0, sumNB = 0;
       months.forEach(function(m){
         var cell = STATE.efficiency.byTechMonth[name] && STATE.efficiency.byTechMonth[name][m];
-        if (cell && cell.reported > 0) {
-          var e = cell.billed / cell.reported * 100; sumB += cell.billed; sumR += cell.reported;
+        if (cell) { sumNB += cell.nonBillable || 0; }
+        var rep = cell ? cell.reported - (exMap[name + '|' + m] || 0) : 0;   // exclusion-adjusted
+        if (cell && rep > 0) {
+          var e = cell.billed / rep * 100; sumB += cell.billed; sumR += rep;
           html += '<td class="num ' + (e >= target ? 'eff-good' : 'eff-bad') + '">' + e.toFixed(0) + '%</td>';
         } else { html += '<td class="num muted">—</td>'; }
       });
       var avg = sumR > 0 ? (sumB / sumR * 100) : null;
-      html += '<td class="num ' + (avg != null && avg >= target ? 'eff-good' : 'eff-bad') + '"><b>' + (avg != null ? avg.toFixed(0) + '%' : '—') + '</b></td></tr>';
+      html += '<td class="num ' + (avg != null && avg >= target ? 'eff-good' : 'eff-bad') + '"><b>' + (avg != null ? avg.toFixed(0) + '%' : '—') + '</b></td>' +
+        '<td class="num">' + (sumNB > 0 ? sumNB.toFixed(1) : '—') + '</td></tr>';
     });
     html += '</tbody></table></div></div><div class="spacer"></div>';
   });
-  // flagged WOs
+  // flagged WOs + non-billable review/exclude list
   html += renderFlaggedWOs(stores);
+  html += renderNonBillableReview(stores);
   sec.innerHTML = html;
+  wireNonBillableExcludes(sec);
 };
+
+/* Non-billable review list — managers/admin can exclude entries that were
+ * out of the tech's control (e.g. management-directed shop repairs), removing
+ * them from the efficiency denominator. */
+function renderNonBillableReview(stores){
+  var divs = stores.map(storeDivision);
+  var rows = (STATE.efficiency.nonBillable || []).filter(function(r){ return divs.indexOf(r.division) !== -1; });
+  if (!rows.length) return '';
+  var excl = STATE.kpi.effExclusions || {};
+  var ord = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  rows = rows.slice().sort(function(a,b){ return (a.display||'').localeCompare(b.display||'') || (ord.indexOf(a.month)-ord.indexOf(b.month)) || (a.category||'').localeCompare(b.category||''); });
+  var totalNB = rows.reduce(function(a,r){ return a + r.hours; }, 0);
+  var exclNB = rows.reduce(function(a,r){ return (excl[r.key] && excl[r.key].excluded) ? a + r.hours : a; }, 0);
+  var html = '<div class="card"><div class="section-title"><h3>Non-Billable Hours — Review &amp; Exclude</h3>' +
+    '<button class="btn btn-primary btn-sm" id="nbSave">Save exclusions</button></div>' +
+    '<div class="muted" style="margin-bottom:10px">Non-billable hours count toward efficiency. Tick to <b>exclude</b> an entry that was outside the tech’s control (it’s removed from the calc). ' +
+    rows.length + ' entries · ' + totalNB.toFixed(1) + ' hrs total · ' + exclNB.toFixed(1) + ' hrs excluded.</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Technician</th><th>Month</th><th>Category</th><th class="num">Entries</th><th class="num">Hours</th><th>Exclude</th><th>Note</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    var ex = excl[r.key] || { excluded: false, note: '' };
+    html += '<tr' + (ex.excluded ? ' class="bg-bad"' : '') + '><td>' + esc(r.display) + '</td><td>' + esc(r.month) + '</td>' +
+      '<td>' + esc(r.category) + '</td><td class="num">' + (r.count || 1) + '</td><td class="num">' + r.hours.toFixed(1) + '</td>' +
+      '<td style="text-align:center"><input type="checkbox" data-nbex="' + esc(r.key) + '"' + (ex.excluded ? ' checked' : '') + '></td>' +
+      '<td><input type="text" data-nbnote="' + esc(r.key) + '" value="' + esc(ex.note) + '" placeholder="reason…" style="min-width:150px"></td></tr>';
+  });
+  html += '</tbody></table></div></div>';
+  return html;
+}
+function wireNonBillableExcludes(sec){
+  function rec(k){ STATE.kpi.effExclusions[k] = STATE.kpi.effExclusions[k] || { excluded: false, note: '' }; return STATE.kpi.effExclusions[k]; }
+  sec.querySelectorAll('input[data-nbex]').forEach(function(cb){
+    cb.addEventListener('change', function(){ rec(cb.getAttribute('data-nbex')).excluded = cb.checked; });
+  });
+  sec.querySelectorAll('input[data-nbnote]').forEach(function(t){
+    t.addEventListener('change', function(){ rec(t.getAttribute('data-nbnote')).note = t.value; });
+  });
+  var sv = $('#nbSave', sec);
+  if (sv) sv.addEventListener('click', function(){ rebuildEfficiencyIndex(); saveKPI().then(function(){ if (CURRENT_PAGE) go(CURRENT_PAGE); }); });
+}
 
 function renderFlaggedWOs(stores){
   var c = STATE.kpi.config;
-  var flagged = STATE.efficiency.rows.filter(function(r){
-    return r.reported > 0 && (r.eff > c.effHighFlag || r.eff < c.effLowFlag);
-  });
+  var flagged = (STATE.efficiency.flagged || []).slice();
   if (stores) flagged = flagged.filter(function(r){ return stores.indexOf(divisionStore(r.division)) !== -1; });
   if (!flagged.length) return '';
   flagged.sort(function(a,b){ return b.eff - a.eff; });
@@ -1081,13 +1135,14 @@ RENDER.tech = function(sec){
   if (!mine) {
     html += '<div class="empty">No efficiency data found for your name yet. It appears once your manager uploads the Labour file.</div>';
   } else {
-    var sumB = 0, sumR = 0;
+    var sumB = 0, sumR = 0; var exMap = excludedNBMap();
     html += '<div class="table-wrap"><table><thead><tr><th>Month</th><th class="num">Hours Reported</th><th class="num">Hours Billed</th><th class="num">Efficiency</th></tr></thead><tbody>';
     months.forEach(function(mo){
       var cell = mine[mo];
-      if (cell && cell.reported > 0) {
-        var e = cell.billed / cell.reported * 100; sumB += cell.billed; sumR += cell.reported;
-        html += '<tr><td><b>' + esc(mo) + '</b></td><td class="num">' + cell.reported.toFixed(1) + '</td><td class="num">' + cell.billed.toFixed(1) +
+      var rep = cell ? cell.reported - (exMap[name + '|' + mo] || 0) : 0;
+      if (cell && rep > 0) {
+        var e = cell.billed / rep * 100; sumB += cell.billed; sumR += rep;
+        html += '<tr><td><b>' + esc(mo) + '</b></td><td class="num">' + rep.toFixed(1) + '</td><td class="num">' + cell.billed.toFixed(1) +
           '</td><td class="num ' + (e>=target?'eff-good':'eff-bad') + '">' + e.toFixed(0) + '%</td></tr>';
       } else { html += '<tr><td>' + esc(mo) + '</td><td class="num muted">—</td><td class="num muted">—</td><td class="num muted">—</td></tr>'; }
     });
@@ -1102,9 +1157,7 @@ RENDER.tech = function(sec){
 
   // flagged WOs for this tech (over 100% and under 75%) — match on the
   // resolved roster name so the tech's own data is found by their login name.
-  var mineFlags = STATE.efficiency.rows.filter(function(r){
-    return (r.display || r.name) === name && r.reported > 0 && (r.eff > c.effHighFlag || r.eff < c.effLowFlag);
-  });
+  var mineFlags = (STATE.efficiency.flagged || []).filter(function(r){ return r.display === name; });
   html += '<div class="card"><div class="section-title"><h3>My Flagged Work Orders</h3><span class="muted">over ' + c.effHighFlag + '% / under ' + c.effLowFlag + '%</span></div>';
   if (!mineFlags.length) html += '<div class="empty">No flagged work orders. 👍</div>';
   else {
@@ -1114,6 +1167,24 @@ RENDER.tech = function(sec){
       html += '<tr class="' + (high?'bg-warn':'bg-bad') + '"><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td><td class="num">' + r.reported.toFixed(1) +
         '</td><td class="num">' + r.billed.toFixed(1) + '</td><td class="num"><b>' + r.eff.toFixed(0) + '%</b></td>' +
         '<td><span class="pill ' + (high?'warn':'bad') + '">' + (high?'Over 100%':'Under 75%') + '</span></td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div><div class="spacer"></div>';
+
+  // this tech's own non-billable hours
+  var myNB = (STATE.efficiency.nonBillable || []).filter(function(r){ return r.display === name; });
+  var nbTotal = myNB.reduce(function(a,r){ return a + r.hours; }, 0);
+  html += '<div class="card"><div class="section-title"><h3>My Non-Billable Hours</h3><span class="muted">' + nbTotal.toFixed(1) + ' hrs total</span></div>';
+  if (!myNB.length) html += '<div class="empty">No non-billable hours recorded.</div>';
+  else {
+    var excl = STATE.kpi.effExclusions || {};
+    myNB.sort(function(a,b){ return String(a.month).localeCompare(String(b.month)); });
+    html += '<div class="table-wrap"><table><thead><tr><th>Month</th><th>Category</th><th class="num">Entries</th><th class="num">Hours</th><th>Status</th></tr></thead><tbody>';
+    myNB.forEach(function(r){
+      var isEx = excl[r.key] && excl[r.key].excluded;
+      html += '<tr' + (isEx ? ' class="bg-ok"' : '') + '><td>' + esc(r.month) + '</td><td>' + esc(r.category) + '</td><td class="num">' + (r.count||1) + '</td>' +
+        '<td class="num">' + r.hours.toFixed(1) + '</td><td>' + (isEx ? '<span class="pill ok">excluded</span>' : '<span class="pill muted">in calc</span>') + '</td></tr>';
     });
     html += '</tbody></table></div>';
   }
@@ -1245,9 +1316,7 @@ function processFile(zone, file, id, handler){
   reader.onload = function(e){
     try {
       var wb = XLSX.read(e.target.result, { type: 'array', cellDates: true });
-      var ws = wb.Sheets[wb.SheetNames[0]];
-      var rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
-      var n = handler(rows);
+      var n = handler(wb);   // handler picks the correct sheet itself
       // also push raw file to Drive for the record
       uploadRaw(file, id);
       whenEl.textContent = 'Loaded ' + n + ' rows · ' + todayStr();
@@ -1258,6 +1327,29 @@ function processFile(zone, file, id, handler){
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+/* Pick the right sheet's rows from a workbook:
+ *   1. a sheet whose name matches one of `preferred` (case-insensitive)
+ *   2. else the first sheet whose headers contain all `required` columns
+ *   3. else the first sheet. */
+function pickSheetRows(wb, preferred, required){
+  var names = wb.SheetNames || [];
+  function rowsOf(nm){ return XLSX.utils.sheet_to_json(wb.Sheets[nm], { defval: '' }); }
+  for (var p = 0; p < (preferred||[]).length; p++) {
+    for (var i = 0; i < names.length; i++) {
+      if (names[i].toLowerCase().trim() === preferred[p].toLowerCase()) return rowsOf(names[i]);
+    }
+  }
+  var norm = function(s){ return String(s).toLowerCase().replace(/[^a-z0-9]/g,''); };
+  for (var j = 0; j < names.length; j++) {
+    var rows = rowsOf(names[j]);
+    if (!rows.length) continue;
+    var hdr = Object.keys(rows[0]).map(norm);
+    var ok = (required||[]).every(function(req){ var r = norm(req); return hdr.some(function(h){ return h.indexOf(r) !== -1; }); });
+    if (ok) return rows;
+  }
+  return names.length ? rowsOf(names[0]) : [];
 }
 function uploadRaw(file, id){
   var r = new FileReader();
@@ -1290,36 +1382,105 @@ function pick(row, candidates){
   return '';
 }
 
-function handleEfficiencyFile(rows){
+function handleEfficiencyFile(wb){
+  // Read the flat "DATA" tab (the pivots build off it); fall back to any sheet
+  // with the expected columns.
+  var rows = pickSheetRows(wb, ['DATA'], ['Payroll Job Code', 'Hours Reported', 'Hours Billed']);
   var out = [];
   rows.forEach(function(r){
     var jobCode = String(pick(r, ['Payroll Job Code','Job Code','JobCode'])).toUpperCase();
-    var charge  = String(pick(r, ['CHARGE','Charge Type','Charge'])).toUpperCase();
     if (jobCode.indexOf('TECH') === -1) return;            // techs only
-    if (charge.indexOf('NON-BILLABLE') !== -1 || charge.indexOf('NONBILLABLE') !== -1) return; // exclude non-billable
+    var charge  = String(pick(r, ['CHARGE','Charge Type','Charge'])).toUpperCase();
     var reported = num(pick(r, ['Hours Reported','Hrs Reported','Reported']));
     var billed   = num(pick(r, ['Hours Billed','Hrs Billed','Billed']));
     if (reported <= 0 && billed <= 0) return;
     var name = String(pick(r, ['Employee Name','Employee','Name'])).trim();
     var div  = String(pick(r, ['Employee Division','Division','Div'])).trim().toUpperCase().charAt(0);
     var empNum = String(pick(r, ['Employee#','Employee #','Emp#','Employee Number','Emp Number'])).trim();
+    var docNum = String(pick(r, ['POS Document#','Document#','Document #','Doc#','Document Number'])).trim();
+    var category = String(pick(r, ['STATUS CODE DESC','Status Code Desc','Labour Type','Category'])).trim();
+    var comment = String(pick(r, ['Comment','Comments','Note'])).trim();
+    // non-billable rows are KEPT (they count toward reported hours / efficiency)
+    var nonBillable = charge.replace(/[^A-Z]/g,'').indexOf('NONBILLABLE') !== -1;
+    var month = normMonth(pick(r, ['Month','Period']));
     out.push({
-      month: normMonth(pick(r, ['Month','Period'])),
-      name: name, empNum: empNum, division: div,
-      docNum: String(pick(r, ['Document#','Document #','Doc#','Document Number'])).trim(),
-      reported: reported, billed: billed,
-      eff: reported > 0 ? (billed / reported * 100) : 0
+      month: month, name: name, empNum: empNum, division: div, docNum: docNum,
+      reported: reported, billed: billed, charge: charge, category: category, comment: comment,
+      nonBillable: nonBillable,
+      eff: reported > 0 ? (billed / reported * 100) : 0,
+      key: [empNum || name, month, docNum, category, comment, reported].join('|')
     });
   });
-  ingestEfficiency(out, todayStr());
-  API.saveEfficiency({ rows: out, uploadedAt: STATE.efficiency.uploadedAt }).catch(noop);
+  aggregateEfficiency(out, todayStr());
+  // Persist the aggregate inside the backend's `rows` field (it stores a rows
+  // array as-is), so efficiency keeps its own storage cell.
+  API.saveEfficiency({ rows: [STATE.efficiency], uploadedAt: STATE.efficiency.uploadedAt }).catch(noop);
   return out.length;
 }
-function ingestEfficiency(rows, when){
-  STATE.efficiency.rows = rows || [];
-  STATE.efficiency.uploadedAt = when || STATE.efficiency.uploadedAt;
-  rebuildEfficiencyIndex();
+
+// Aggregate raw labour rows into the compact, storable structure.
+function aggregateEfficiency(rawRows, when){
+  var c = STATE.kpi.config;
+  var by = {}, techDiv = {}, nbMap = {}, flagged = [];
+  (rawRows || []).forEach(function(r){
+    if (!r.name && !r.empNum) return;
+    var rec = rosterForEmpNum(r.empNum);
+    var display = rec ? rec.name : rosterDisplayForLabour(r.name);
+    if (r.division && !techDiv[display]) techDiv[display] = r.division;
+    var m = by[display] = by[display] || {};
+    var cell = m[r.month] = m[r.month] || { reported: 0, billed: 0, nonBillable: 0 };
+    cell.billed += r.billed;
+    cell.reported += r.reported;                 // full reported incl non-billable
+    if (r.nonBillable) {
+      cell.nonBillable += r.reported;
+      // aggregate non-billable by tech / month / category (keeps storage small)
+      var cat = r.category || r.charge || 'NON-BILLABLE';
+      var key = [display, r.month, cat].join('|');
+      var nb = nbMap[key] || (nbMap[key] = { key: key, display: display, division: r.division,
+        month: r.month, category: cat, hours: 0, count: 0 });
+      nb.hours += r.reported; nb.count++;
+    } else if (r.reported > 0) {
+      var eff = r.billed / r.reported * 100;
+      if (eff > c.effHighFlag || eff < c.effLowFlag) {
+        flagged.push({ display: display, division: r.division, month: r.month,
+          docNum: r.docNum, reported: r.reported, billed: r.billed, eff: eff });
+      }
+    }
+  });
+  // keep only the most extreme flagged WOs so the stored blob fits one cell
+  flagged.sort(function(a,b){ return Math.abs(b.eff - 87.5) - Math.abs(a.eff - 87.5); });
+  STATE.efficiency = {
+    byTechMonth: by, techDiv: techDiv,
+    nonBillable: Object.keys(nbMap).map(function(k){ return nbMap[k]; }),
+    flagged: flagged.slice(0, 120), uploadedAt: when || STATE.efficiency.uploadedAt
+  };
 }
+
+// Accept the load response / aggregate / legacy flat rows and normalise.
+function ingestEfficiency(data, when){
+  var agg = null, rows = null, up = (data && data.uploadedAt) || when;
+  if (data) {
+    if (data.byTechMonth) agg = data;                                  // bare aggregate
+    else if (Array.isArray(data.rows)) {
+      if (data.rows[0] && data.rows[0].byTechMonth) agg = data.rows[0]; // new: rows:[aggregate]
+      else rows = data.rows;                                           // legacy flat rows
+    } else if (Array.isArray(data)) rows = data;
+  }
+  if (agg) {
+    STATE.efficiency = {
+      byTechMonth: agg.byTechMonth || {}, techDiv: agg.techDiv || {},
+      nonBillable: agg.nonBillable || [], flagged: agg.flagged || [], uploadedAt: up || null
+    };
+  } else if (rows && rows.length) {
+    // legacy: flat rows array (all billable, no non-billable)
+    aggregateEfficiency(rows.map(function(r){ return {
+      name: r.name, empNum: r.empNum, division: r.division, month: r.month,
+      docNum: r.docNum, reported: num(r.reported), billed: num(r.billed),
+      category: '', comment: '', nonBillable: false }; }), up);
+  }
+}
+// kept for callers; exclusions are applied at render time so this is a no-op
+function rebuildEfficiencyIndex(){}
 
 /* ---- Labour-data name → roster employee linkage --------------------
  * The Labour export and the roster use different name strings for the
@@ -1371,21 +1532,9 @@ function rosterDisplayForLabour(labourName){
   if (lastMatches.length === 1) return lastMatches[0];
   return labourName;                              // no confident match
 }
-function rebuildEfficiencyIndex(){
-  var by = {};
-  (STATE.efficiency.rows || []).forEach(function(r){
-    if (!r.name && !r.empNum) return;
-    var rec = rosterForEmpNum(r.empNum);          // 1. join by employee number
-    r.display = rec ? rec.name : rosterDisplayForLabour(r.name);  // 2. fall back to name
-    by[r.display] = by[r.display] || {};
-    by[r.display][r.month] = by[r.display][r.month] || { reported: 0, billed: 0 };
-    by[r.display][r.month].reported += r.reported;
-    by[r.display][r.month].billed += r.billed;
-  });
-  STATE.efficiency.byTechMonth = by;
-}
 
-function handlePOSFile(rows){
+function handlePOSFile(wb){
+  var rows = pickSheetRows(wb, ['DATA','POS','Sheet0'], ['Document Status', 'Document']);
   var out = [];
   rows.forEach(function(r){
     var status = String(pick(r, ['Document Status','Status'])).trim().toUpperCase().charAt(0);
@@ -1415,11 +1564,47 @@ function ingestPOS(rows, when){
   STATE.pos.uploadedAt = when || STATE.pos.uploadedAt;
 }
 
-function handleWarrantyFile(rows){
-  // Warranty parsing lives in the Warranty module; here we just archive the
-  // upload and stamp the time so Configuration shows it.
+function handleWarrantyFile(wb){
+  // Parse the Warranty Work Orders export — the data source for the
+  // Warranty Admin KPI (close-within-14-days-of-last-punch).
+  var rows = pickSheetRows(wb, ['Sheet0','DATA'], ['Document#', 'WIP Last Punch']);
+  var out = [];
+  rows.forEach(function(r){
+    var doc = String(pick(r, ['Document#','Document #','Doc#','Document Number'])).trim();
+    if (!doc) return;
+    var type = String(pick(r, ['Document Type (W/S/Q)','Document Type','Type'])).trim().toUpperCase().charAt(0);
+    var code = String(pick(r, ['Document Code','Code'])).trim().toUpperCase();
+    if (type && type !== 'W' && code !== 'W') return;        // warranty docs only
+    var div = String(pick(r, ['Division','Div'])).trim().toUpperCase().charAt(0);
+    if (!div) div = doc.slice(1,2).toUpperCase();             // WM.. / WS..
+    var closed = parseDate(pick(r, ['Date Closed/Printed','Date Closed','Closed','Date Closed/Printed (CCYYMMDD)']));
+    var opened = parseDate(pick(r, ['Date Opened','Opened','Date Opened (CCYYMMDD)']));
+    var intFlag = String(pick(r, ['Work Order: Int. flag (A/S)','Int. flag (A/S)','Int Flag'])).trim();
+    var warrCode = String(pick(r, ['Work Order: Warr. Addrs#','Warr. Addrs#','Work Order: Warranty Code','Warranty Code'])).toUpperCase();
+    out.push({
+      doc: doc, division: div, type: type || 'W',
+      status: String(pick(r, ['Document Status (O/R/C/k=Cancelled)','Document Status','Status'])).trim().toUpperCase().charAt(0),
+      soldBy: String(pick(r, ['Document Sold By Name','Sold By'])).trim(),
+      opened: opened ? opened.toISOString().slice(0,10) : '',
+      closed: closed ? closed.toISOString().slice(0,10) : '',
+      quarter: closed ? quarterOfDate(closed) : '',
+      lastPunchDays: num(pick(r, ['WIP Last Punch Days to Close (Closed - Last Punch)','WIP Last Punch Days to Close','Last Punch Days to Close'])),
+      daysToClose: num(pick(r, ['Days to Close (Closed-Opened)','Days to Close'])),
+      total: num(pick(r, ['Document Amount (Total)','Document Amount','Total'])),
+      internal: (!!intFlag) || warrCode.indexOf('05101') !== -1 || warrCode.indexOf('S05102') !== -1
+    });
+  });
+  STATE.warrantyWO = { rows: out, uploadedAt: todayStr() };
   STATE.warrantyUpload.uploadedAt = todayStr();
-  return rows.length;
+  API.saveWarranty({ wo: out, uploadedAt: STATE.warrantyWO.uploadedAt }).catch(noop);
+  return out.length;
+}
+
+// Calendar quarter key 'YYYY-Qn' for a Date.
+function quarterOfDate(d){
+  if (!d) return '';
+  var q = Math.floor(d.getMonth() / 3) + 1;
+  return d.getFullYear() + '-Q' + q;
 }
 
 /* ============================ 10. MANAGER KPI PDF EXPORT ============================ */
@@ -1498,42 +1683,52 @@ function managerFilterStaff(list){
   if (SESSION.role === 'manager' && SESSION.store) return list.filter(function(s){ return s.store === SESSION.store; });
   return list;
 }
+function hasEfficiency(){ return Object.keys(STATE.efficiency.byTechMonth || {}).length > 0; }
 function effTechsForDivision(div){
-  // Only techs that actually have efficiency metrics for this division,
-  // keyed by their resolved roster name (r.display) so each person shows
-  // once with a clean name — no duplicate/empty rows.
-  var totals = {};
-  STATE.efficiency.rows.forEach(function(r){
-    if (r.division !== div || !r.name) return;
-    var key = r.display || r.name;
-    totals[key] = (totals[key] || 0) + (r.reported || 0) + (r.billed || 0);
-  });
-  return Object.keys(totals).filter(function(n){ return totals[n] > 0; }).sort();
+  var by = STATE.efficiency.byTechMonth || {}, td = STATE.efficiency.techDiv || {};
+  return Object.keys(by).filter(function(name){ return td[name] === div; }).sort();
 }
 function effMonths(){
-  var set = {};
-  STATE.efficiency.rows.forEach(function(r){ if (r.month) set[r.month] = true; });
+  var set = {}, by = STATE.efficiency.byTechMonth || {};
+  Object.keys(by).forEach(function(n){ Object.keys(by[n]).forEach(function(m){ if (m) set[m] = true; }); });
   var order = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return Object.keys(set).sort(function(a,b){ return order.indexOf(a) - order.indexOf(b); });
 }
+// Excluded non-billable hours keyed by "display|month" (from the exclusion list).
+function excludedNBMap(){
+  var excl = STATE.kpi.effExclusions || {}, map = {};
+  (STATE.efficiency.nonBillable || []).forEach(function(nb){
+    if (excl[nb.key] && excl[nb.key].excluded) { var k = nb.display + '|' + nb.month; map[k] = (map[k] || 0) + nb.hours; }
+  });
+  return map;
+}
 function avgEfficiency(periodKey, store){
-  // store === null → all stores; uses efficiency rows by division
+  // store === null → all stores. Efficiency denominator excludes manually-
+  // excluded non-billable hours.
+  var by = STATE.efficiency.byTechMonth || {}, td = STATE.efficiency.techDiv || {}, exMap = excludedNBMap();
   var b = 0, r = 0;
-  STATE.efficiency.rows.forEach(function(row){
-    if (store && divisionStore(row.division) !== store) return;
-    b += row.billed; r += row.reported;
+  Object.keys(by).forEach(function(name){
+    if (store && divisionStore(td[name]) !== store) return;
+    Object.keys(by[name]).forEach(function(m){
+      var cell = by[name][m]; b += cell.billed;
+      r += cell.reported - (exMap[name + '|' + m] || 0);
+    });
   });
   return r > 0 ? (b / r * 100) : null;
 }
+var MONTHS_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function normMonth(v){
   if (v == null || v === '') return '';
-  if (v instanceof Date) return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][v.getMonth()];
+  if (v instanceof Date) return MONTHS_ABBR[v.getMonth()];
   var s = String(v).trim();
-  var m = s.match(/^(\d{1,2})/);
-  if (m && /^\d/.test(s) && Number(m[1]) >= 1 && Number(m[1]) <= 12 && !/[a-z]/i.test(s)) {
-    return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][Number(m[1]) - 1];
-  }
-  return s.slice(0,3).replace(/^./, function(c){ return c.toUpperCase(); });
+  // YYYYMM (e.g. 202601) -> month from the last two digits
+  if (/^\d{6}$/.test(s)) { var mm = parseInt(s.slice(4, 6), 10); if (mm >= 1 && mm <= 12) return MONTHS_ABBR[mm - 1]; }
+  // YYYY-MM or MM/YYYY etc.
+  var m6 = s.match(/(\d{4})[-/](\d{1,2})/); if (m6) { var mo = parseInt(m6[2],10); if (mo>=1&&mo<=12) return MONTHS_ABBR[mo-1]; }
+  // leading 1-2 digit month
+  var m = s.match(/^(\d{1,2})\b/);
+  if (m && Number(m[1]) >= 1 && Number(m[1]) <= 12 && !/[a-z]/i.test(s)) return MONTHS_ABBR[Number(m[1]) - 1];
+  return s.slice(0, 3).replace(/^./, function(c){ return c.toUpperCase(); });
 }
 function parseDate(v){
   if (!v) return null;
