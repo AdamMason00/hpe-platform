@@ -40,6 +40,7 @@ var STATE = {
   // that won't fit a single Sheets cell): per-tech/month totals, a non-billable
   // detail list (for review/exclude), and only the flagged WOs.
   efficiency: { byTechMonth: {}, techDiv: {}, nonBillable: [], flagged: [], uploadedAt: null },
+  nbDetail: [],   // in-memory only (this session's upload): individual non-billable punches for drill-down
   pos: { rows: [], uploadedAt: null },
   warrantyWO: { rows: [], uploadedAt: null },   // parsed warranty work orders (KPI source)
   warrantyUpload: { uploadedAt: null },
@@ -910,32 +911,73 @@ function renderNonBillableReview(stores){
   var ord = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   rows = rows.slice().sort(function(a,b){ return (a.display||'').localeCompare(b.display||'') || (ord.indexOf(a.month)-ord.indexOf(b.month)) || (a.category||'').localeCompare(b.category||''); });
   var totalNB = rows.reduce(function(a,r){ return a + r.hours; }, 0);
-  var exclNB = rows.reduce(function(a,r){ return (excl[r.key] && excl[r.key].excluded) ? a + r.hours : a; }, 0);
+  var exclNB = rows.reduce(function(a,r){ return a + nbExcludedHours(r); }, 0);
+  var haveDetail = (STATE.nbDetail || []).length > 0;
   var html = '<div class="card"><div class="section-title"><h3>Non-Billable Hours — Review &amp; Exclude</h3>' +
     '<button class="btn btn-primary btn-sm" id="nbSave">Save exclusions</button></div>' +
-    '<div class="muted" style="margin-bottom:10px">Non-billable hours count toward efficiency. Tick to <b>exclude</b> an entry that was outside the tech’s control (it’s removed from the calc). ' +
-    rows.length + ' entries · ' + totalNB.toFixed(1) + ' hrs total · ' + exclNB.toFixed(1) + ' hrs excluded.</div>' +
-    '<div class="table-wrap"><table><thead><tr><th>Technician</th><th>Month</th><th>Category</th><th class="num">Entries</th><th class="num">Hours</th><th>Exclude</th><th>Note</th></tr></thead><tbody>';
+    '<div class="muted" style="margin-bottom:10px">Non-billable hours count toward efficiency. Enter the <b>hours to exclude</b> for any entry outside the tech’s control (removed from the calc)' +
+    (haveDetail ? ', or use <b>Pick</b> to choose individual time punches' : '') + '. ' +
+    rows.length + ' categories · ' + totalNB.toFixed(1) + ' hrs total · ' + exclNB.toFixed(1) + ' hrs excluded.</div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Technician</th><th>Month</th><th>Category</th><th class="num">Entries</th><th class="num">Hours</th><th class="num">Exclude hrs</th>' +
+    (haveDetail ? '<th>Punches</th>' : '') + '<th>Note</th></tr></thead><tbody>';
   rows.forEach(function(r){
-    var ex = excl[r.key] || { excluded: false, note: '' };
-    html += '<tr' + (ex.excluded ? ' class="bg-bad"' : '') + '><td>' + esc(r.display) + '</td><td>' + esc(r.month) + '</td>' +
+    var ex = excl[r.key] || {};
+    var exHrs = nbExcludedHours(r);
+    html += '<tr' + (exHrs > 0 ? ' class="bg-bad"' : '') + '><td>' + esc(r.display) + '</td><td>' + esc(r.month) + '</td>' +
       '<td>' + esc(r.category) + '</td><td class="num">' + (r.count || 1) + '</td><td class="num">' + r.hours.toFixed(1) + '</td>' +
-      '<td style="text-align:center"><input type="checkbox" data-nbex="' + esc(r.key) + '"' + (ex.excluded ? ' checked' : '') + '></td>' +
-      '<td><input type="text" data-nbnote="' + esc(r.key) + '" value="' + esc(ex.note) + '" placeholder="reason…" style="min-width:150px"></td></tr>';
+      '<td class="num"><input type="number" step="0.1" min="0" max="' + r.hours + '" data-nbhrs="' + esc(r.key) + '" value="' + (exHrs ? exHrs.toFixed(1) : '') + '" placeholder="0" style="width:74px;text-align:right"></td>' +
+      (haveDetail ? '<td>' + ((STATE.nbDetail || []).some(function(d){ return d.catKey === r.key; }) ? '<button class="btn btn-ghost btn-sm" data-nbpick="' + esc(r.key) + '">Pick…</button>' : '') + '</td>' : '') +
+      '<td><input type="text" data-nbnote="' + esc(r.key) + '" value="' + esc(ex.note || '') + '" placeholder="reason…" style="min-width:140px"></td></tr>';
   });
   html += '</tbody></table></div></div>';
   return html;
 }
+function nbRec(k){ STATE.kpi.effExclusions[k] = STATE.kpi.effExclusions[k] || { excludeHours: 0, note: '' }; return STATE.kpi.effExclusions[k]; }
 function wireNonBillableExcludes(sec){
-  function rec(k){ STATE.kpi.effExclusions[k] = STATE.kpi.effExclusions[k] || { excluded: false, note: '' }; return STATE.kpi.effExclusions[k]; }
-  sec.querySelectorAll('input[data-nbex]').forEach(function(cb){
-    cb.addEventListener('change', function(){ rec(cb.getAttribute('data-nbex')).excluded = cb.checked; });
+  sec.querySelectorAll('input[data-nbhrs]').forEach(function(inp){
+    inp.addEventListener('change', function(){
+      var k = inp.getAttribute('data-nbhrs'); var rec = nbRec(k);
+      rec.excludeHours = Math.max(0, Math.min(num(inp.value), num(inp.max)));
+      if ('excluded' in rec) delete rec.excluded;
+      inp.value = rec.excludeHours ? rec.excludeHours.toFixed(1) : '';
+    });
   });
   sec.querySelectorAll('input[data-nbnote]').forEach(function(t){
-    t.addEventListener('change', function(){ rec(t.getAttribute('data-nbnote')).note = t.value; });
+    t.addEventListener('change', function(){ nbRec(t.getAttribute('data-nbnote')).note = t.value; });
+  });
+  sec.querySelectorAll('button[data-nbpick]').forEach(function(b){
+    b.addEventListener('click', function(){ showNonBillablePicker(b.getAttribute('data-nbpick')); });
   });
   var sv = $('#nbSave', sec);
-  if (sv) sv.addEventListener('click', function(){ rebuildEfficiencyIndex(); saveKPI().then(function(){ if (CURRENT_PAGE) go(CURRENT_PAGE); }); });
+  if (sv) sv.addEventListener('click', function(){ saveKPI().then(function(){ if (CURRENT_PAGE) go(CURRENT_PAGE); }); });
+}
+
+/* Pick individual time punches within a non-billable category; the sum of the
+ * chosen punches becomes that category's "hours to exclude". */
+function showNonBillablePicker(catKey){
+  var punches = (STATE.nbDetail || []).filter(function(d){ return d.catKey === catKey; });
+  if (!punches.length) { toast('Punch detail is only available right after an upload.', 'bad'); return; }
+  var parts = catKey.split('|');
+  var rec = nbRec(catKey);
+  var alreadyExcl = (rec.excludeHours != null) ? num(rec.excludeHours) : 0;
+  var body = '<div class="muted" style="margin-bottom:10px">' + esc(parts[0]) + ' · ' + esc(parts[1]) + ' · ' + esc(parts[2]) +
+      ' — tick the punches that were outside the tech’s control. <span id="npSum">0.0</span> hrs selected.</div>' +
+    '<div class="table-wrap" style="max-height:46vh;overflow:auto"><table><thead><tr><th>Exclude</th><th class="num">Hours</th><th>WO#</th><th>Comment</th></tr></thead><tbody>';
+  punches.forEach(function(p, i){
+    body += '<tr><td style="text-align:center"><input type="checkbox" data-np="' + i + '" data-h="' + p.hours + '"></td>' +
+      '<td class="num">' + p.hours.toFixed(2) + '</td><td class="mono">' + esc(p.docNum || '') + '</td><td>' + esc(p.comment || '') + '</td></tr>';
+  });
+  body += '</tbody></table></div>' +
+    '<div class="flex between center" style="margin-top:12px"><div class="muted">Currently excluded: ' + alreadyExcl.toFixed(1) + ' hrs</div>' +
+    '<button class="btn btn-primary" id="npApply">Apply selected hours</button></div>';
+  modal('Pick time punches', body, function(box){
+    function sum(){ var t = 0; box.querySelectorAll('input[data-np]:checked').forEach(function(cb){ t += num(cb.getAttribute('data-h')); }); $('#npSum', box).textContent = t.toFixed(1); return t; }
+    box.querySelectorAll('input[data-np]').forEach(function(cb){ cb.addEventListener('change', sum); });
+    $('#npApply', box).addEventListener('click', function(){
+      var rec2 = nbRec(catKey); rec2.excludeHours = Math.round(sum() * 100) / 100; if ('excluded' in rec2) delete rec2.excluded;
+      saveKPI().then(function(){ closeModal(); if (CURRENT_PAGE) go(CURRENT_PAGE); });
+    });
+  });
 }
 
 function renderFlaggedWOs(stores){
@@ -1182,9 +1224,9 @@ RENDER.tech = function(sec){
     myNB.sort(function(a,b){ return String(a.month).localeCompare(String(b.month)); });
     html += '<div class="table-wrap"><table><thead><tr><th>Month</th><th>Category</th><th class="num">Entries</th><th class="num">Hours</th><th>Status</th></tr></thead><tbody>';
     myNB.forEach(function(r){
-      var isEx = excl[r.key] && excl[r.key].excluded;
-      html += '<tr' + (isEx ? ' class="bg-ok"' : '') + '><td>' + esc(r.month) + '</td><td>' + esc(r.category) + '</td><td class="num">' + (r.count||1) + '</td>' +
-        '<td class="num">' + r.hours.toFixed(1) + '</td><td>' + (isEx ? '<span class="pill ok">excluded</span>' : '<span class="pill muted">in calc</span>') + '</td></tr>';
+      var exHrs = nbExcludedHours(r);
+      html += '<tr' + (exHrs > 0 ? ' class="bg-ok"' : '') + '><td>' + esc(r.month) + '</td><td>' + esc(r.category) + '</td><td class="num">' + (r.count||1) + '</td>' +
+        '<td class="num">' + r.hours.toFixed(1) + '</td><td>' + (exHrs > 0 ? '<span class="pill ok">' + exHrs.toFixed(1) + ' hr excl</span>' : '<span class="pill muted">in calc</span>') + '</td></tr>';
     });
     html += '</tbody></table></div>';
   }
@@ -1421,7 +1463,7 @@ function handleEfficiencyFile(wb){
 // Aggregate raw labour rows into the compact, storable structure.
 function aggregateEfficiency(rawRows, when){
   var c = STATE.kpi.config;
-  var by = {}, techDiv = {}, nbMap = {}, flagged = [];
+  var by = {}, techDiv = {}, nbMap = {}, flagged = [], detail = [];
   (rawRows || []).forEach(function(r){
     if (!r.name && !r.empNum) return;
     var rec = rosterForEmpNum(r.empNum);
@@ -1439,6 +1481,9 @@ function aggregateEfficiency(rawRows, when){
       var nb = nbMap[key] || (nbMap[key] = { key: key, display: display, division: r.division,
         month: r.month, category: cat, hours: 0, count: 0 });
       nb.hours += r.reported; nb.count++;
+      // individual punch detail (in-memory only — for the drill-down picker)
+      detail.push({ catKey: key, display: display, month: r.month, category: cat,
+        comment: r.comment, docNum: r.docNum, hours: r.reported });
     } else if (r.reported > 0) {
       var eff = r.billed / r.reported * 100;
       if (eff > c.effHighFlag || eff < c.effLowFlag) {
@@ -1454,6 +1499,7 @@ function aggregateEfficiency(rawRows, when){
     nonBillable: Object.keys(nbMap).map(function(k){ return nbMap[k]; }),
     flagged: flagged.slice(0, 120), uploadedAt: when || STATE.efficiency.uploadedAt
   };
+  STATE.nbDetail = detail;   // in-memory only; never persisted
 }
 
 // Accept the load response / aggregate / legacy flat rows and normalise.
@@ -1694,11 +1740,20 @@ function effMonths(){
   var order = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return Object.keys(set).sort(function(a,b){ return order.indexOf(a) - order.indexOf(b); });
 }
-// Excluded non-billable hours keyed by "display|month" (from the exclusion list).
+// Hours removed from a non-billable category (entered directly or via the punch
+// picker); legacy {excluded:true} means "exclude all hours of that category".
+function nbExcludedHours(nb){
+  var ex = (STATE.kpi.effExclusions || {})[nb.key];
+  if (!ex) return 0;
+  var hrs = (ex.excludeHours != null) ? num(ex.excludeHours) : (ex.excluded ? nb.hours : 0);
+  return Math.max(0, Math.min(hrs, nb.hours));
+}
+// Excluded non-billable hours keyed by "display|month".
 function excludedNBMap(){
-  var excl = STATE.kpi.effExclusions || {}, map = {};
+  var map = {};
   (STATE.efficiency.nonBillable || []).forEach(function(nb){
-    if (excl[nb.key] && excl[nb.key].excluded) { var k = nb.display + '|' + nb.month; map[k] = (map[k] || 0) + nb.hours; }
+    var hrs = nbExcludedHours(nb);
+    if (hrs > 0) { var k = nb.display + '|' + nb.month; map[k] = (map[k] || 0) + hrs; }
   });
   return map;
 }
