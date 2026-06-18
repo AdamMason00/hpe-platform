@@ -1064,10 +1064,11 @@ function renderFlaggedWOs(stores){
   flagged.sort(function(a,b){ return b.eff - a.eff; });
   var html = '<div class="card"><div class="section-title"><h3>Flagged Work Orders</h3>' +
     '<span class="muted">over ' + c.effHighFlag + '% or under ' + c.effLowFlag + '%</span></div>' +
-    '<div class="table-wrap"><table><thead><tr><th>Tech</th><th>Month</th><th>WO#</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
+    '<div class="table-wrap"><table><thead><tr><th>Tech</th><th>Month</th><th>WO#</th><th class="num">Punches</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
   flagged.slice(0, 200).forEach(function(r){
     var high = r.eff > c.effHighFlag;
     html += '<tr class="' + (high ? 'bg-warn' : 'bg-bad') + '"><td>' + esc(r.display || r.name) + '</td><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td>' +
+      '<td class="num">' + (r.punches || 1) + '</td>' +
       '<td class="num">' + r.reported.toFixed(1) + '</td><td class="num">' + r.billed.toFixed(1) + '</td>' +
       '<td class="num"><b>' + r.eff.toFixed(0) + '%</b></td>' +
       '<td><span class="pill ' + (high ? 'warn' : 'bad') + '">' + (high ? 'Over 100%' : 'Under 75%') + '</span></td></tr>';
@@ -1460,10 +1461,10 @@ RENDER.tech = function(sec){
   html += '<div class="card"><div class="section-title"><h3>My Flagged Work Orders</h3><span class="muted">over ' + c.effHighFlag + '% / under ' + c.effLowFlag + '%</span></div>';
   if (!mineFlags.length) html += '<div class="empty">No flagged work orders. 👍</div>';
   else {
-    html += '<div class="table-wrap"><table><thead><tr><th>Month</th><th>WO#</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
+    html += '<div class="table-wrap"><table><thead><tr><th>Month</th><th>WO#</th><th class="num">Punches</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
     mineFlags.forEach(function(r){
       var high = r.eff > c.effHighFlag;
-      html += '<tr class="' + (high?'bg-warn':'bg-bad') + '"><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td><td class="num">' + r.reported.toFixed(1) +
+      html += '<tr class="' + (high?'bg-warn':'bg-bad') + '"><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td><td class="num">' + (r.punches||1) + '</td><td class="num">' + r.reported.toFixed(1) +
         '</td><td class="num">' + r.billed.toFixed(1) + '</td><td class="num"><b>' + r.eff.toFixed(0) + '%</b></td>' +
         '<td><span class="pill ' + (high?'warn':'bad') + '">' + (high?'Over 100%':'Under 75%') + '</span></td></tr>';
     });
@@ -1720,7 +1721,7 @@ function handleEfficiencyFile(wb){
 // Aggregate raw labour rows into the compact, storable structure.
 function aggregateEfficiency(rawRows, when){
   var c = STATE.kpi.config;
-  var by = {}, techDiv = {}, nbMap = {}, flagged = [], detail = [];
+  var by = {}, techDiv = {}, nbMap = {}, woMap = {}, detail = [];
   (rawRows || []).forEach(function(r){
     if (!r.name && !r.empNum) return;
     var rec = rosterForEmpNum(r.empNum);
@@ -1741,12 +1742,23 @@ function aggregateEfficiency(rawRows, when){
       // individual punch detail (in-memory only — for the drill-down picker)
       detail.push({ catKey: key, display: display, month: r.month, category: cat,
         comment: r.comment, docNum: r.docNum, hours: r.reported });
-    } else if (r.reported > 0) {
-      var eff = r.billed / r.reported * 100;
-      if (eff > c.effHighFlag || eff < c.effLowFlag) {
-        flagged.push({ display: display, division: r.division, month: r.month,
-          docNum: r.docNum, reported: r.reported, billed: r.billed, eff: eff });
-      }
+    } else if (r.docNum) {
+      // consolidate billable punches by work order (one row per WO, not per punch)
+      var wk = display + '|' + r.month + '|' + r.docNum;
+      var wo = woMap[wk] || (woMap[wk] = { display: display, division: r.division, month: r.month,
+        docNum: r.docNum, reported: 0, billed: 0, punches: 0 });
+      wo.reported += r.reported; wo.billed += r.billed; wo.punches += 1;
+    }
+  });
+  // flag work orders (consolidated) whose total efficiency is out of range
+  var flagged = [];
+  Object.keys(woMap).forEach(function(k){
+    var w = woMap[k];
+    if (w.reported <= 0) return;
+    var eff = w.billed / w.reported * 100;
+    if (eff > c.effHighFlag || eff < c.effLowFlag) {
+      flagged.push({ display: w.display, division: w.division, month: w.month, docNum: w.docNum,
+        reported: w.reported, billed: w.billed, eff: eff, punches: w.punches });
     }
   });
   // keep only the most extreme flagged WOs so the stored blob fits one cell
