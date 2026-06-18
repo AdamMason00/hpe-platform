@@ -498,9 +498,11 @@ RENDER.annual = function(sec){
   });
   html += '</tbody></table></div></div>';
 
-  // manager YTD strip
+  // manager YTD strip — admins see both; a manager sees only their own store
   html += '<div class="spacer"></div><div class="grid g2">';
-  Object.keys(CFG.MANAGER_BONUS).forEach(function(email){
+  Object.keys(CFG.MANAGER_BONUS).filter(function(email){
+    return SESSION.role === 'admin' || SESSION.store === CFG.MANAGER_BONUS[email].store;
+  }).forEach(function(email){
     var y = managerYtd(email); var nm = CFG.MANAGER_BONUS[email].name;
     html += '<div class="card"><div class="section-title"><h3>' + esc(nm) + ' — KPI Bonus YTD</h3></div>' +
       progress('Earned ' + money(y.earned), 'Cap ' + money(y.cap), y.cap ? (y.earned/y.cap*100) : 0) +
