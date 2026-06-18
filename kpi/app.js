@@ -853,7 +853,36 @@ RENDER.payroll = function(sec){
     html += '</tbody></table></div>';
   });
   html += '</div>';
+
+  // ---- Manual / discretionary bonuses for all staff (this period) ----
+  var roster = managerFilterStaff(STATE.staff).filter(function(s){ return s.active !== false; });
+  var mbAll = (STATE.kpi.manualBonuses && STATE.kpi.manualBonuses[pk]) || {};
+  var mbTotal = roster.reduce(function(a,s){ return a + num((mbAll[s.name] || {}).amount); }, 0);
+  html += '<div class="spacer"></div><div class="card"><div class="section-title"><h3>Manual / Discretionary Bonuses — ' + periodLabel(pk) + '</h3>' +
+    '<button class="btn btn-primary btn-sm" id="mbSave">Save bonuses</button></div>' +
+    '<div class="muted" style="margin-bottom:10px">Enter a manual bonus for any employee this period (one-off, year-end, etc.). Total: <b>' + money2(mbTotal) + '</b></div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Employee</th><th>Store</th><th>Role</th><th class="num">Bonus $</th><th>Note</th></tr></thead><tbody>';
+  roster.forEach(function(s){
+    var rec = mbAll[s.name] || { amount: '', note: '' };
+    html += '<tr><td><b>' + esc(s.name) + '</b></td><td>' + storeName(s.store) + '</td><td><span class="pill muted">' + esc(s.roleType) + '</span></td>' +
+      '<td class="num"><input type="number" step="0.01" data-mbonus="' + esc(s.name) + '" value="' + (rec.amount !== '' && rec.amount != null ? num(rec.amount) : '') + '" placeholder="0" style="width:96px;text-align:right"></td>' +
+      '<td><input type="text" data-mbnote="' + esc(s.name) + '" value="' + esc(rec.note || '') + '" placeholder="reason…" style="min-width:160px"></td></tr>';
+  });
+  html += '</tbody></table></div></div>';
   sec.innerHTML = html;
+
+  function mbRec(name){
+    STATE.kpi.manualBonuses[pk] = STATE.kpi.manualBonuses[pk] || {};
+    STATE.kpi.manualBonuses[pk][name] = STATE.kpi.manualBonuses[pk][name] || { amount: 0, note: '' };
+    return STATE.kpi.manualBonuses[pk][name];
+  }
+  sec.querySelectorAll('input[data-mbonus]').forEach(function(inp){
+    inp.addEventListener('change', function(){ mbRec(inp.getAttribute('data-mbonus')).amount = num(inp.value); });
+  });
+  sec.querySelectorAll('input[data-mbnote]').forEach(function(t){
+    t.addEventListener('change', function(){ mbRec(t.getAttribute('data-mbnote')).note = t.value; });
+  });
+  $('#mbSave', sec).addEventListener('click', function(){ saveKPI().then(function(){ if (CURRENT_PAGE) go('payroll'); }); });
 };
 
 /* ---- Tech Efficiency ---- */
