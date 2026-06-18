@@ -1061,17 +1061,16 @@ function renderFlaggedWOs(stores){
   var flagged = (STATE.efficiency.flagged || []).slice();
   if (stores) flagged = flagged.filter(function(r){ return stores.indexOf(divisionStore(r.division)) !== -1; });
   if (!flagged.length) return '';
-  flagged.sort(function(a,b){ return b.eff - a.eff; });
+  flagged.sort(function(a,b){ return a.eff - b.eff; });
   var html = '<div class="card"><div class="section-title"><h3>Flagged Work Orders</h3>' +
-    '<span class="muted">over ' + c.effHighFlag + '% or under ' + c.effLowFlag + '%</span></div>' +
+    '<span class="muted">under ' + c.effLowFlag + '%</span></div>' +
     '<div class="table-wrap"><table><thead><tr><th>Tech</th><th>Month</th><th>WO#</th><th class="num">Punches</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
   flagged.slice(0, 200).forEach(function(r){
-    var high = r.eff > c.effHighFlag;
-    html += '<tr class="' + (high ? 'bg-warn' : 'bg-bad') + '"><td>' + esc(r.display || r.name) + '</td><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td>' +
+    html += '<tr class="bg-bad"><td>' + esc(r.display || r.name) + '</td><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td>' +
       '<td class="num">' + (r.punches || 1) + '</td>' +
       '<td class="num">' + r.reported.toFixed(1) + '</td><td class="num">' + r.billed.toFixed(1) + '</td>' +
-      '<td class="num"><b>' + r.eff.toFixed(0) + '%</b></td>' +
-      '<td><span class="pill ' + (high ? 'warn' : 'bad') + '">' + (high ? 'Over 100%' : 'Under 75%') + '</span></td></tr>';
+      '<td class="num"><b>' + Math.floor(r.eff) + '%</b></td>' +
+      '<td><span class="pill bad">Under ' + c.effLowFlag + '%</span></td></tr>';
   });
   html += '</tbody></table></div></div>';
   return html;
@@ -1458,15 +1457,14 @@ RENDER.tech = function(sec){
   // flagged WOs for this tech (over 100% and under 75%) — match on the
   // resolved roster name so the tech's own data is found by their login name.
   var mineFlags = (STATE.efficiency.flagged || []).filter(function(r){ return r.display === name; });
-  html += '<div class="card"><div class="section-title"><h3>My Flagged Work Orders</h3><span class="muted">over ' + c.effHighFlag + '% / under ' + c.effLowFlag + '%</span></div>';
+  html += '<div class="card"><div class="section-title"><h3>My Flagged Work Orders</h3><span class="muted">under ' + c.effLowFlag + '%</span></div>';
   if (!mineFlags.length) html += '<div class="empty">No flagged work orders. 👍</div>';
   else {
     html += '<div class="table-wrap"><table><thead><tr><th>Month</th><th>WO#</th><th class="num">Punches</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
-    mineFlags.forEach(function(r){
-      var high = r.eff > c.effHighFlag;
-      html += '<tr class="' + (high?'bg-warn':'bg-bad') + '"><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td><td class="num">' + (r.punches||1) + '</td><td class="num">' + r.reported.toFixed(1) +
-        '</td><td class="num">' + r.billed.toFixed(1) + '</td><td class="num"><b>' + r.eff.toFixed(0) + '%</b></td>' +
-        '<td><span class="pill ' + (high?'warn':'bad') + '">' + (high?'Over 100%':'Under 75%') + '</span></td></tr>';
+    mineFlags.sort(function(a,b){ return a.eff - b.eff; }).forEach(function(r){
+      html += '<tr class="bg-bad"><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td><td class="num">' + (r.punches||1) + '</td><td class="num">' + r.reported.toFixed(1) +
+        '</td><td class="num">' + r.billed.toFixed(1) + '</td><td class="num"><b>' + Math.floor(r.eff) + '%</b></td>' +
+        '<td><span class="pill bad">Under ' + c.effLowFlag + '%</span></td></tr>';
     });
     html += '</tbody></table></div>';
   }
@@ -1750,19 +1748,19 @@ function aggregateEfficiency(rawRows, when){
       wo.reported += r.reported; wo.billed += r.billed; wo.punches += 1;
     }
   });
-  // flag work orders (consolidated) whose total efficiency is out of range
+  // flag work orders (consolidated) that came in UNDER the efficiency target
   var flagged = [];
   Object.keys(woMap).forEach(function(k){
     var w = woMap[k];
     if (w.reported <= 0) return;
     var eff = w.billed / w.reported * 100;
-    if (eff > c.effHighFlag || eff < c.effLowFlag) {
+    if (eff < c.effLowFlag) {
       flagged.push({ display: w.display, division: w.division, month: w.month, docNum: w.docNum,
         reported: w.reported, billed: w.billed, eff: eff, punches: w.punches });
     }
   });
-  // keep only the most extreme flagged WOs so the stored blob fits one cell
-  flagged.sort(function(a,b){ return Math.abs(b.eff - 87.5) - Math.abs(a.eff - 87.5); });
+  // lowest efficiency first; keep the worst 120 so the stored blob fits one cell
+  flagged.sort(function(a,b){ return a.eff - b.eff; });
   STATE.efficiency = {
     byTechMonth: by, techDiv: techDiv,
     nonBillable: Object.keys(nbMap).map(function(k){ return nbMap[k]; }),
