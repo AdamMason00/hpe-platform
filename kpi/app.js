@@ -1056,10 +1056,23 @@ function showNonBillablePicker(catKey){
   });
 }
 
+// Merge flagged entries that share the same tech+month+WO# (handles data
+// persisted as individual punches before WO-consolidation was added).
+function consolidateFlagged(arr){
+  var m = {};
+  (arr || []).forEach(function(r){
+    var nm = r.display || r.name;
+    var k = nm + '|' + r.month + '|' + r.docNum;
+    var w = m[k] || (m[k] = { display: nm, division: r.division, month: r.month, docNum: r.docNum, reported: 0, billed: 0, punches: 0 });
+    w.reported += r.reported; w.billed += r.billed; w.punches += (r.punches || 1);
+  });
+  return Object.keys(m).map(function(k){ var w = m[k]; w.eff = w.reported > 0 ? w.billed / w.reported * 100 : 0; return w; });
+}
+
 function renderFlaggedWOs(stores){
   var c = STATE.kpi.config;
-  // under-target only (also screens out over-100% WOs persisted before this rule)
-  var flagged = (STATE.efficiency.flagged || []).filter(function(r){ return r.eff < c.effLowFlag; });
+  // consolidate by WO, then keep only under-target (also screens out over-100%)
+  var flagged = consolidateFlagged(STATE.efficiency.flagged).filter(function(r){ return r.eff < c.effLowFlag; });
   if (stores) flagged = flagged.filter(function(r){ return stores.indexOf(divisionStore(r.division)) !== -1; });
   if (!flagged.length) return '';
   // group by technician; within each tech, in calendar-month sequence
@@ -1462,7 +1475,7 @@ RENDER.tech = function(sec){
 
   // flagged WOs for this tech (over 100% and under 75%) — match on the
   // resolved roster name so the tech's own data is found by their login name.
-  var mineFlags = (STATE.efficiency.flagged || []).filter(function(r){ return r.display === name && r.eff < c.effLowFlag; });
+  var mineFlags = consolidateFlagged((STATE.efficiency.flagged || []).filter(function(r){ return (r.display || r.name) === name; })).filter(function(r){ return r.eff < c.effLowFlag; });
   html += '<div class="card"><div class="section-title"><h3>My Flagged Work Orders</h3><span class="muted">under ' + c.effLowFlag + '%</span></div>';
   if (!mineFlags.length) html += '<div class="empty">No flagged work orders. 👍</div>';
   else {
