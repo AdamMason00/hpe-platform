@@ -357,7 +357,8 @@ function legacyRole_(role) {
   role = String(role || '').toLowerCase();
   if (role.indexOf('manager') !== -1) return 'manager';
   if (role.indexOf('support') !== -1) return 'support';
-  if (role.indexOf('warranty') !== -1 || role.indexOf('admin') !== -1) return 'admin';
+  if (role.indexOf('warranty') !== -1) return 'warranty';   // warranty admin = own KPI only
+  if (role.indexOf('admin') !== -1) return 'admin';
   return 'tech';
 }
 

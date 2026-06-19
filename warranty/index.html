@@ -4948,11 +4948,12 @@ function showToast(m){var t=document.getElementById('toast');t.textContent=m;t.c
 function mapWarrantyRole(sess){
   var name=(sess.name||'').toLowerCase();
   switch(sess.role){
-    case 'manager': return 'mgr';
-    case 'tech':    return 'tech';
-    case 'support': return 'sa';
+    case 'manager':  return 'mgr';
+    case 'tech':     return 'tech';
+    case 'support':  return 'sa';
+    case 'warranty': return 'admin';   // dedicated warranty-admin role -> Warranty Admin
     case 'admin':
-      // Andy Van Bommel is the Warranty Admin; other admins get Management.
+      // older records may still tag Andy as a generic admin
       if(name.indexOf('andy')!==-1||name.indexOf('van bommel')!==-1) return 'admin';
       return 'mgmt';
     default: return 'tech';

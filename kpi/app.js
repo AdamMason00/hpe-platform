@@ -337,7 +337,7 @@ var NAV = [
   ]},
   { group: 'Tools', items: [
     { id: 'scenario',   label: 'Scenario Testing',     ic: '🧪', roles: ['admin'], super: true },
-    { id: 'warranty-kpi', label: 'Warranty Admin KPI', ic: '🛠️', roles: ['admin'] },
+    { id: 'warranty-kpi', label: 'Warranty Admin KPI', ic: '🛠️', roles: ['admin','warranty'] },
     { id: 'config',     label: 'Configuration',        ic: '⚒', roles: ['admin'], super: true }
   ]},
   { group: 'My Dashboard', items: [
@@ -421,6 +421,7 @@ function go(pageId){
 function landingPage(){
   if (SESSION.role === 'tech') return 'tech';
   if (SESSION.role === 'support') return 'support';
+  if (SESSION.role === 'warranty') return 'warranty-kpi';
   return 'dashboard';
 }
 
@@ -718,7 +719,7 @@ function showEditStaff(name){
         '<option value="south"' + (s.store==='south'?' selected':'') + '>South Store</option>' +
         '<option value="north"' + (s.store==='north'?' selected':'') + '>North Store</option></select></label>' +
       '<label class="fld"><span>Role</span><select id="eRole">' +
-        ['tech','support','manager','admin'].map(function(r){ return '<option value="'+r+'"'+(s.roleType===r?' selected':'')+'>'+r+'</option>'; }).join('') +
+        ['tech','support','manager','admin','warranty'].map(function(r){ return '<option value="'+r+'"'+(s.roleType===r?' selected':'')+'>'+r+'</option>'; }).join('') +
         '</select></label>' +
       '<label class="fld"><span>Pay type</span><select id="ePayType">' +
         '<option value="Hourly"' + ((s.payType||'Hourly')==='Hourly'?' selected':'') + '>Hourly</option>' +
@@ -771,7 +772,7 @@ function showAddStaff(){
       '<label class="fld" style="grid-column:1 / -1"><span>Full name *</span><input type="text" id="aName" placeholder="e.g. Jane Smith" autofocus></label>' +
       '<label class="fld"><span>Store</span><select id="aStore"><option value="south">South Store</option><option value="north">North Store</option></select></label>' +
       '<label class="fld"><span>Role</span><select id="aRole">' +
-        ['tech','support','manager','admin'].map(function(r){ return '<option value="'+r+'">'+r+'</option>'; }).join('') + '</select></label>' +
+        ['tech','support','manager','admin','warranty'].map(function(r){ return '<option value="'+r+'">'+r+'</option>'; }).join('') + '</select></label>' +
       '<label class="fld"><span>Pay type</span><select id="aPayType"><option value="Hourly">Hourly</option><option value="Salary">Salary</option></select></label>' +
       '<label class="fld"><span id="aRateLbl">Hourly rate $</span><input type="number" step="0.01" id="aRate" value="0"></label>' +
       '<label class="fld"><span>FTE</span><input type="number" step="0.1" id="aFte" value="1"></label>' +

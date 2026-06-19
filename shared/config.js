@@ -128,7 +128,7 @@
     { name: 'Travis Wolfenden', store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', payRate: 27,    payType: 'Hourly', active: true, queue: 'IM' },
     { name: 'Bryan Smith',      store: 'north', division: 'M', roleType: 'support', fte: 1.0, pin: '', payRate: 27.5,  payType: 'Hourly', active: true, queue: 'WM' },
     // ---- Warranty admin ----
-    { name: 'Andy Van Bommel',  store: 'north', division: 'M', roleType: 'admin',   fte: 1.0, pin: '', payRate: 33.5,  payType: 'Hourly', active: true },
+    { name: 'Andy Van Bommel',  store: 'north', division: 'M', roleType: 'warranty', fte: 1.0, pin: '', payRate: 33.5,  payType: 'Hourly', active: true },
     // ---- Office admin ----
     { name: 'Mell Hogg',        store: 'south', division: 'S', roleType: 'admin',   fte: 1.0, pin: '', payRate: 58000, payType: 'Salary', active: true },
     // ---- Managers (also email-auth Tier 1) ----
