@@ -1062,12 +1062,17 @@ function renderFlaggedWOs(stores){
   var flagged = (STATE.efficiency.flagged || []).filter(function(r){ return r.eff < c.effLowFlag; });
   if (stores) flagged = flagged.filter(function(r){ return stores.indexOf(divisionStore(r.division)) !== -1; });
   if (!flagged.length) return '';
-  flagged.sort(function(a,b){ return a.eff - b.eff; });
+  // group by technician; within each tech, in calendar-month sequence
+  flagged.sort(function(a,b){ return (a.display||'').localeCompare(b.display||'') || (monthIndex(a.month) - monthIndex(b.month)); });
   var html = '<div class="card"><div class="section-title"><h3>Flagged Work Orders</h3>' +
-    '<span class="muted">under ' + c.effLowFlag + '%</span></div>' +
-    '<div class="table-wrap"><table><thead><tr><th>Tech</th><th>Month</th><th>WO#</th><th class="num">Punches</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
-  flagged.slice(0, 200).forEach(function(r){
-    html += '<tr class="bg-bad"><td>' + esc(r.display || r.name) + '</td><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td>' +
+    '<span class="muted">under ' + c.effLowFlag + '% · by technician</span></div>' +
+    '<div class="table-wrap"><table><thead><tr><th>Technician</th><th>Month</th><th>WO#</th><th class="num">Punches</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
+  var lastName = null;
+  flagged.slice(0, 300).forEach(function(r){
+    var nm = r.display || r.name;
+    var newGroup = nm !== lastName; lastName = nm;
+    html += '<tr class="bg-bad"' + (newGroup ? ' style="border-top:2px solid #1c1c1c"' : '') + '>' +
+      '<td>' + (newGroup ? '<b>' + esc(nm) + '</b>' : '') + '</td><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td>' +
       '<td class="num">' + (r.punches || 1) + '</td>' +
       '<td class="num">' + r.reported.toFixed(1) + '</td><td class="num">' + r.billed.toFixed(1) + '</td>' +
       '<td class="num"><b>' + Math.floor(r.eff) + '%</b></td>' +
@@ -1462,7 +1467,7 @@ RENDER.tech = function(sec){
   if (!mineFlags.length) html += '<div class="empty">No flagged work orders. 👍</div>';
   else {
     html += '<div class="table-wrap"><table><thead><tr><th>Month</th><th>WO#</th><th class="num">Punches</th><th class="num">Reported</th><th class="num">Billed</th><th class="num">Eff</th><th>Flag</th></tr></thead><tbody>';
-    mineFlags.sort(function(a,b){ return a.eff - b.eff; }).forEach(function(r){
+    mineFlags.sort(function(a,b){ return monthIndex(a.month) - monthIndex(b.month); }).forEach(function(r){
       html += '<tr class="bg-bad"><td>' + esc(r.month) + '</td><td class="mono">' + esc(r.docNum) + '</td><td class="num">' + (r.punches||1) + '</td><td class="num">' + r.reported.toFixed(1) +
         '</td><td class="num">' + r.billed.toFixed(1) + '</td><td class="num"><b>' + Math.floor(r.eff) + '%</b></td>' +
         '<td><span class="pill bad">Under ' + c.effLowFlag + '%</span></td></tr>';
@@ -2042,6 +2047,7 @@ function avgEfficiency(periodKey, store){
   return r > 0 ? (b / r * 100) : null;
 }
 var MONTHS_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function monthIndex(m){ var i = MONTHS_ABBR.indexOf(m); return i === -1 ? 99 : i; }
 function normMonth(v){
   if (v == null || v === '') return '';
   if (v instanceof Date) return MONTHS_ABBR[v.getMonth()];
