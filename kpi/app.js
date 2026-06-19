@@ -178,25 +178,28 @@ function ensureManagerBonus(){
   });
 }
 
-function saveKPI(){
-  return API.saveKPI({ kpi: STATE.kpi }).then(function(){ toast('Saved', 'ok'); })
-    .catch(function(e){ toast('Save failed: ' + e.message, 'bad'); });
+// Central save-status indicator (header) so it's always clear an edit persisted.
+function setSaveStatus(state, msg){
+  var el = $('#saveStatus'); if (!el) return;
+  var now = new Date();
+  var t = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+  if (state === 'saving') { el.className = 'save-status saving'; el.innerHTML = '<span class="spinner dark"></span> Saving…'; }
+  else if (state === 'saved') { el.className = 'save-status ok'; el.textContent = '✓ Saved ' + t; }
+  else { el.className = 'save-status bad'; el.textContent = '✗ Save failed' + (msg ? ' — ' + msg : ''); }
 }
-function saveStaff(){
-  return API.saveStaff({ staff: STATE.staff })
-    .then(function(){ toast('Roster saved', 'ok'); })
-    .catch(function(e){ toast('Save failed: ' + e.message, 'bad'); });
+// Wrap a save promise: show status + toast, and surface failures clearly.
+function persist(promise, okMsg){
+  setSaveStatus('saving');
+  return promise.then(function(r){ setSaveStatus('saved'); toast(okMsg || 'Saved', 'ok'); return r; })
+    .catch(function(e){ setSaveStatus('failed', e.message); toast('Save failed: ' + e.message + ' — not saved.', 'bad'); throw e; });
 }
+function saveKPI(){ return persist(API.saveKPI({ kpi: STATE.kpi }), 'Saved').catch(function(){}); }
+function saveStaff(){ return persist(API.saveStaff({ staff: STATE.staff }), 'Roster saved').catch(function(){}); }
 function savePINs(){
   var pins = STATE.staff.map(function(s){ return { name: s.name, pin: s.pin }; });
-  return API.savePINs({ pins: pins }).then(function(){ toast('PINs saved', 'ok'); })
-    .catch(function(e){ toast('Save failed: ' + e.message, 'bad'); });
+  return persist(API.savePINs({ pins: pins }), 'PINs saved').catch(function(){});
 }
-function saveExclusions(){
-  return API.saveExclusions({ exclusions: STATE.exclusions })
-    .then(function(){ toast('Exclusions saved', 'ok'); })
-    .catch(function(e){ toast('Save failed: ' + e.message, 'bad'); });
-}
+function saveExclusions(){ return persist(API.saveExclusions({ exclusions: STATE.exclusions }), 'Exclusions saved').catch(function(){}); }
 
 function setBusy(b){
   var rb = $('#reloadBtn'); if (!rb) return;
@@ -306,28 +309,36 @@ function combinedGrowthPool(){
   return storeBank('south') + storeBank('north');
 }
 
-/* ============================ 6. NAV / ROUTING ============================ */
+/* ============================ 6. NAV / ROUTING ============================
+ * Access tiers:
+ *   super  = email-authenticated admins (Adam, Brian, John) — full access,
+ *            incl. all compensation/financial/config pages (super:true).
+ *   admin  = other admins signed in by employee # (e.g. office/warranty admin).
+ *   manager= Steve/Bill — operational, own store only, NO compensation pages.
+ *   tech / support = own dashboards. */
+function isSuperAdmin(){ return !!SESSION && SESSION.role === 'admin' && SESSION.tier === 'email'; }
+
 var NAV = [
   { group: 'Overview', items: [
-    { id: 'dashboard',  label: 'Dashboard',           ic: '▦', roles: ['admin','manager'] },
+    { id: 'dashboard',  label: 'Dashboard',            ic: '▦', roles: ['admin','manager'] },
     { id: 'scoreboard', label: 'Quarterly Scoreboard', ic: '▣', roles: ['admin','manager'] },
-    { id: 'annual',     label: 'Annual Summary',       ic: '∑', roles: ['admin','manager'] }
+    { id: 'annual',     label: 'Annual Summary',       ic: '∑', roles: ['admin'], super: true }
   ]},
   { group: 'Data Entry', items: [
-    { id: 'quarterly',  label: 'Quarterly Results',    ic: '✎', roles: ['admin','manager'] }
+    { id: 'quarterly',  label: 'Quarterly Results',    ic: '✎', roles: ['admin'], super: true }
   ]},
   { group: 'Payroll & People', items: [
-    { id: 'staff',      label: 'Staff Roster',         ic: '👥', roles: ['admin','manager'] },
-    { id: 'payroll',    label: 'Payroll Summary',      ic: '💲', roles: ['admin','manager'] },
+    { id: 'staff',      label: 'Staff Roster',         ic: '👥', roles: ['admin'], super: true },
+    { id: 'payroll',    label: 'Payroll Summary',      ic: '💲', roles: ['admin'], super: true },
     { id: 'efficiency', label: 'Tech Efficiency',      ic: '⚙', roles: ['admin','manager'] },
-    { id: 'payments',   label: 'Payment History',      ic: '🧾', roles: ['admin','manager'] },
-    { id: 'growth',     label: 'Growth Bonus',         ic: '📈', roles: ['admin','manager'] },
+    { id: 'payments',   label: 'Payment History',      ic: '🧾', roles: ['admin'], super: true },
+    { id: 'growth',     label: 'Growth Bonus',         ic: '📈', roles: ['admin'], super: true },
     { id: 'manager-bonuses', label: 'Manager Bonuses', ic: '🏅', roles: ['admin','manager'] }
   ]},
   { group: 'Tools', items: [
-    { id: 'scenario',   label: 'Scenario Testing',     ic: '🧪', roles: ['admin','manager'] },
+    { id: 'scenario',   label: 'Scenario Testing',     ic: '🧪', roles: ['admin'], super: true },
     { id: 'warranty-kpi', label: 'Warranty Admin KPI', ic: '🛠️', roles: ['admin'] },
-    { id: 'config',     label: 'Configuration',        ic: '⚒', roles: ['admin'] }
+    { id: 'config',     label: 'Configuration',        ic: '⚒', roles: ['admin'], super: true }
   ]},
   { group: 'My Dashboard', items: [
     { id: 'store',   label: 'Store Dashboard',   ic: '🏬', roles: ['manager'] },
@@ -336,13 +347,23 @@ var NAV = [
   ]}
 ];
 
+function canAccess(it){
+  if (it.roles.indexOf(SESSION.role) === -1) return false;
+  if (it.super && !isSuperAdmin()) return false;          // super-admin only
+  return true;
+}
 function visibleItems(){
   var out = [];
   NAV.forEach(function(g){
-    var items = g.items.filter(function(it){ return it.roles.indexOf(SESSION.role) !== -1; });
+    var items = g.items.filter(canAccess);
     if (items.length) out.push({ group: g.group, items: items });
   });
   return out;
+}
+function allowedPageIds(){
+  var ids = {};
+  NAV.forEach(function(g){ g.items.forEach(function(it){ if (canAccess(it)) ids[it.id] = true; }); });
+  return ids;
 }
 
 function buildNav(){
@@ -380,6 +401,8 @@ var PAGE_META = {
 };
 
 function go(pageId){
+  // access guard: never render a page the current user isn't allowed to see
+  if (!allowedPageIds()[pageId]) pageId = landingPage();
   CURRENT_PAGE = pageId;
   document.querySelectorAll('.nav-item').forEach(function(n){
     n.classList.toggle('active', n.getAttribute('data-page') === pageId);
