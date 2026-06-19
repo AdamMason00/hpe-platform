@@ -1058,7 +1058,8 @@ function showNonBillablePicker(catKey){
 
 function renderFlaggedWOs(stores){
   var c = STATE.kpi.config;
-  var flagged = (STATE.efficiency.flagged || []).slice();
+  // under-target only (also screens out over-100% WOs persisted before this rule)
+  var flagged = (STATE.efficiency.flagged || []).filter(function(r){ return r.eff < c.effLowFlag; });
   if (stores) flagged = flagged.filter(function(r){ return stores.indexOf(divisionStore(r.division)) !== -1; });
   if (!flagged.length) return '';
   flagged.sort(function(a,b){ return a.eff - b.eff; });
@@ -1456,7 +1457,7 @@ RENDER.tech = function(sec){
 
   // flagged WOs for this tech (over 100% and under 75%) — match on the
   // resolved roster name so the tech's own data is found by their login name.
-  var mineFlags = (STATE.efficiency.flagged || []).filter(function(r){ return r.display === name; });
+  var mineFlags = (STATE.efficiency.flagged || []).filter(function(r){ return r.display === name && r.eff < c.effLowFlag; });
   html += '<div class="card"><div class="section-title"><h3>My Flagged Work Orders</h3><span class="muted">under ' + c.effLowFlag + '%</span></div>';
   if (!mineFlags.length) html += '<div class="empty">No flagged work orders. 👍</div>';
   else {
