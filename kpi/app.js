@@ -1202,10 +1202,10 @@ function renderYearEndPool(){
   var g = STATE.kpi.growth;
   var pool = combinedGrowthPool();
   var remaining = Math.max(0, pool - num(g.paidOut));
-  // eligible = active techs + support + warranty admin (company-wide)
-  var elig = STATE.staff.filter(function(s){ return s.active !== false && ['tech','support','admin'].indexOf(s.roleType) !== -1; });
-  // sort: techs, support, admin
-  var order = { tech:0, support:1, admin:2 };
+  // eligible = active techs + support + warranty admin + office admin (bonus record)
+  var elig = STATE.staff.filter(function(s){ return s.active !== false && ['tech','support','admin','warranty'].indexOf(s.roleType) !== -1; });
+  // sort: techs, support, then admins/warranty
+  var order = { tech:0, support:1, warranty:2, admin:3 };
   elig.sort(function(a,b){ return (order[a.roleType]-order[b.roleType]) || a.name.localeCompare(b.name); });
   var alloc = g.allocation || {};
   var totalRatio = elig.reduce(function(a,s){ return a + num(alloc[s.name]); }, 0);
